@@ -50,7 +50,7 @@ const common = `
   vec4 tex(sampler2D t, vec2 p){ return texture2D(t, vec2(p.x/WH.x, 1.-p.y/WH.y)); }
 `;
 const layerFrag = common + `
-  uniform float uClipY;
+  uniform float uClipY, uRim;
   uniform vec2 uLocal; // смещение локальных uv (для качающегося фонаря)
   void main(){
     vec2 p = vec2(vUv.x*WH.x, (1.-vUv.y)*WH.y) + uLocal;
@@ -71,10 +71,6 @@ const layerFrag = common + `
       vec2 cell = floor(sp/3.4833);
       float h = hash(cell);
       float fade = smoothstep(470.,120.,sp.y);
-      if (h>0.9955) {
-        float tw = 0.55+0.45*sin(uTime*(0.6+hash(cell+7.)*2.5)+hash(cell+3.)*6.28);
-        col += vec3(0.9,0.93,1.)*tw*fade*(0.5+0.5*hash(cell+1.));
-      }
       float dm = length(sp-uMoon);
       col += vec3(0.55,0.65,0.85)*(0.30*exp(-dm/70.)+0.12*exp(-dm/260.));
     }
@@ -117,6 +113,13 @@ const layerFrag = common + `
     float LL = uLanternLit*exp(-length(sp-uLanternPos)/120.);
     float Lw = L*1.5/(1.+L*0.6); col += t.rgb*vec3(1.,.55,.22)*(Lw+LL*1.1)*uLit;
     col += vec3(1.,.45,.15)*L*L*0.08*uLit*t.a;
+    if (uRim > 0.) { // тёплая кромка на гранях камней, обращённых к огню
+      vec2 dir = normalize(uFirePos - sp);
+      float face = t.a * (1. - tex(map, p + dir*7.).a*.75 - tex(map, p + dir*14.).a*.25);
+      float near = exp(-fr/150.), fl = .75 + .25*noise(sp*.04 + vec2(uTime*2.3, uTime*1.1));
+      float k = uFire*uFlick*fl*uRim;
+      col += t.rgb*vec3(1.,.5,.18)*k*(face*3.2*exp(-fr/260.) + near*1.1) + vec3(1.,.42,.12)*face*k*k*.12*exp(-fr/200.);
+    }
     gl_FragColor = vec4(col, uKind==1. ? 1. : t.a);
   }`;
 
@@ -139,7 +142,7 @@ function layer(name, { kind = 'plain', lit = 1, amb = 1, extra = {} } = {}) {
   const mat = new THREE.ShaderMaterial({
     vertexShader: layerVert, fragmentShader: layerFrag, transparent: true, depthTest: false, depthWrite: false,
     uniforms: { ...shared, map: { value: loadTex(name) }, uRefl1: { value: null }, uRefl2: { value: null },
-      uLit: { value: lit }, uAmb: { value: amb }, uKind: { value: KIND[kind] }, uLocal: { value: new THREE.Vector2() }, uClipY: { value: 0 }, ...extra },
+      uLit: { value: lit }, uAmb: { value: amb }, uKind: { value: KIND[kind] }, uLocal: { value: new THREE.Vector2() }, uClipY: { value: 0 }, uRim: { value: 0 }, ...extra },
   });
   const m = new THREE.Mesh(plane, mat); m.position.set(W / 2, H / 2, 0); m.renderOrder = order++;
   scene.add(m); return m;
@@ -202,6 +205,66 @@ class Particles {
 // ---------- сборка сцены (сзади вперёд) ----------
 layer('01_sky', { kind: 'sky', lit: 0 });
 layer('02_moon', { lit: 0, amb: 1.25 });
+// Звёздное небо: крошечные, средние и яркие звёзды, случайно (с кучностью и слабым Млечным Путём),
+// мерцание у каждой своё, яркие иногда вспыхивают крестиком. За луной и облаками — гаснут.
+const starMat = new THREE.ShaderMaterial({ vertexShader: layerVert, transparent: true, depthTest: false, depthWrite: false, blending: THREE.AdditiveBlending,
+  uniforms: { uTime: shared.uTime, uMoon: shared.uMoon, uRain: shared.uRain },
+  fragmentShader: `uniform float uTime,uRain; uniform vec2 uMoon; varying vec2 vUv;
+  float hash(vec2 p){ return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453); }
+  float noise(vec2 p){ vec2 i=floor(p),f=fract(p); f=f*f*(3.-2.*f);
+    return mix(mix(hash(i),hash(i+vec2(1,0)),f.x),mix(hash(i+vec2(0,1)),hash(i+vec2(1,1)),f.x),f.y); }
+  float fbm(vec2 p){ float v=0.,a=.5; for(int i=0;i<5;i++){ v+=a*noise(p); p=p*2.02+vec2(3.1,1.7); a*=.5; } return v; }
+  float dens(vec2 p){ // та же плотность, что у облаков
+    vec2 q = vec2(p.x*0.0032 - uTime*0.004, p.y*0.016);
+    float w = fbm(q + vec2(fbm(q*1.7+uTime*0.003)*1.2, 0.));
+    float band = smoothstep(60., 170., p.y) * smoothstep(420., 250., p.y);
+    float nearMoon = exp(-pow(length((p-uMoon)*vec2(.6,1.6))/260.,2.));
+    return smoothstep(.46, .82, w) * band * (0.55 + 0.6*nearMoon);
+  }
+  float milky(vec2 p){ float d = (p.y - (40. + p.x*0.28)) / 95.; return exp(-d*d) * (0.6 + 0.8*noise(p*0.012)); }
+  // одна звезда на клетку cs: x — яркость, y — флаг креста (для ярких)
+  vec3 star(vec2 p, float cs, float prob, float seed, float smin, float smax, float bmin, float bmax, float crossy){
+    vec2 c = floor(p/cs);
+    float clump = noise(c*cs*0.006 + seed) ;
+    float pr = prob * (0.35 + 1.3*clump) * (1. + 1.6*milky(c*cs));
+    if (hash(c + seed) > pr) return vec3(0.);
+    vec2 pos = floor((c + .15 + .7*vec2(hash(c+seed+1.3), hash(c+seed+2.7)))*cs) + .5;
+    float h2 = hash(c+seed+4.1), h3 = hash(c+seed+5.9), h4 = hash(c+seed+8.3);
+    float s = floor(mix(smin, smax, h2*h2) + .5);
+    vec2 d = abs(p - pos);
+    float b = mix(bmin, bmax, h3*h3);
+    float tw = 0.62 + 0.38*sin(uTime*(0.5 + 3.2*h4) + h3*40.) * (0.7 + 0.3*sin(uTime*(1.7+h2*4.) + h4*20.));
+    float core = step(max(d.x,d.y), s*.5);
+    float v = core * b * tw;
+    if (crossy > 0.) { // редкая вспышка: 4 луча, растут и тают
+      float g = pow(max(0., sin(uTime*(0.09 + 0.17*h4) + h2*60.)), 70.);
+      float arm = 1. + 5.*g;
+      float cr = (step(d.x, .5)*step(d.y, s*.5 + arm) + step(d.y, .5)*step(d.x, s*.5 + arm));
+      float fall = 1. - max(d.x, d.y)/(s*.5 + arm + 1.);
+      v = max(v, min(1., cr) * fall * g * 1.4) + core*g*.6;
+    }
+    return vec3(v, h3, h2);
+  }
+  void main(){
+    vec2 p = vec2(vUv.x*${W}., (1.-vUv.y)*${H}.);
+    float fade = smoothstep(470., 120., p.y);
+    if (fade <= 0.) discard;
+    p = floor(p) + .5;                                     // сетка в 1 пиксель мира
+    vec3 s1 = star(p, 5., .42, 11., 1., 1., .14, .5, 0.);      // крошечные, много
+    vec3 s2 = star(p, 17., .36, 37., 1., 2., .4, .8, 0.);     // средние
+    vec3 s3 = star(p, 60., .45, 71., 2., 3., .8, 1.15, 1.);     // яркие, с бликами
+    float v = s1.x + s2.x + s3.x;
+    float hue = s1.x > 0. ? s1.y : s2.x > 0. ? s2.y : s3.z;
+    vec3 tint = mix(vec3(.75,.85,1.), vec3(1.,.9,.76), smoothstep(.55, 1., hue)); // голубоватые и тёплые
+    float mw = milky(p) * .05 * (0.5 + noise(p*.03));       // слабое сияние Млечного Пути
+    float moon = smoothstep(55., 120., length(p - uMoon));
+    float cl = 1. - min(1., dens(p)*1.8);
+    float a = (v + mw) * fade * moon * cl * (1. - .85*uRain);
+    if (a < .004) discard;
+    gl_FragColor = vec4(tint*v*fade*moon*cl*(1.-.85*uRain) + vec3(.55,.6,.8)*mw*fade*moon*cl*(1.-uRain), 1.);
+  }` });
+const stars = new THREE.Mesh(plane, starMat); stars.position.set(W / 2, H / 2, 0); stars.renderOrder = order++; scene.add(stars);
+
 // Процедурные облака вместо мультяшного PNG: тонкие перистые/слоистые полосы, низкая прозрачность
 const cloudMat = new THREE.ShaderMaterial({ vertexShader: layerVert, transparent: true, depthTest: false, depthWrite: false,
   uniforms: { uTime: shared.uTime, uMoon: shared.uMoon },
@@ -312,7 +375,7 @@ chain.renderOrder = lanternMesh.renderOrder - 0.5; lanternPivot.add(chain);
 const lanternFlame = glow(14, 22, [1.0, 0.75, 0.35]);
 const lanternGlow = glow(170, 170, [0.9, 0.5, 0.18]);
 for (const g of [lanternFlame, lanternGlow]) { g.position.set(P.lanternFlame[0] - P.lanternPivot[0], -(P.lanternFlame[1] - P.lanternPivot[1]), 0); lanternPivot.add(g); }
-layer('11_firering', { lit: 1.0 });
+layer('11_firering', { lit: 1.0, extra: { uRim: { value: 1 } } });
 layer('12_fire_logs', { lit: 1.0 });
 const ORD_FIRE = order++; // поленья в костре
 const coal = glow(300, 90, [1.0, 0.28, 0.05], { noise: 1 }); coal.position.set(P.fire[0], wy(P.fire[1] + 5), 0); scene.add(coal);
@@ -376,7 +439,7 @@ const flames = FLAME_LAYERS.map((L) => {
   return { m, L };
 });
 // передние камни кольца рисуем повторно поверх пламени
-const ringFront = layer('11_firering', { lit: 1.0, extra: { uClipY: { value: CLIP_Y } } });
+const ringFront = layer('11_firering', { lit: 1.0, extra: { uClipY: { value: CLIP_Y }, uRim: { value: 1 } } });
 const ORD_ZONE = order++;
 const sparks = new Particles(150, THREE.AdditiveBlending); scene.add(sparks.points);
 // статичная поленница заменена отдельными поленьями (см. woodview.js)
@@ -428,7 +491,13 @@ audio.setVolumes(settings.volumes); audio.setRain(settings.rain, settings.rainLe
 let rainLevelShown = settings.rainLevel;
 shared.uRain.value = settings.rain ? 1 : 0;
 const rainBtn = document.getElementById('rain');
-function renderRain() { rainBtn.classList.toggle('on', settings.rain); rainBtn.setAttribute('aria-pressed', settings.rain); }
+function renderRain() {
+  rainBtn.classList.toggle('on', settings.rain); rainBtn.setAttribute('aria-pressed', settings.rain);
+  // «Сила дождя» видна только при дожде; скрытый ползунок не участвует в навигации пультом
+  const box = document.querySelector('label.rainlvl'); box.classList.toggle('collapsed', !settings.rain);
+  const r = document.getElementById('rainlvl'); r.disabled = !settings.rain; r.tabIndex = settings.rain ? 0 : -1;
+  if (!settings.rain && document.activeElement === r) rainBtn.focus();
+}
 rainBtn.addEventListener('click', () => { settings = toggleRain(settings); saveSettings(settings); audio.setRain(settings.rain, settings.rainLevel); renderRain(); });
 const rainLvl = document.getElementById('rainlvl');
 rainLvl.value = Math.round(settings.rainLevel * 100);
@@ -454,24 +523,18 @@ if (TEST_CONTROLS) {
   }
 } else testRow.remove();
 
-const seg = document.getElementById('logtype'), info = document.getElementById('info');
+const info = document.getElementById('info');
 // выбор породы для кнопки «Подбросить дрова» (если такой нет в поленнице — берётся любая)
-const KINDS = [{ id: null, name: 'любые' }, { id: 'birch', name: 'берёза' }, { id: 'oak', name: 'дуб' }, { id: 'pine', name: 'сосна' }, { id: 'kindling', name: 'растопка' }];
-KINDS.forEach((k, i) => {
-  const b = document.createElement('button'); b.type = 'button'; b.className = 'seg'; b.textContent = k.name;
-  b.setAttribute('role', 'radio');
-  b.addEventListener('click', () => { sel = i; renderUI(); }); seg.appendChild(b);
-});
+// «Подбросить дрова» берёт случайное полено из поленницы
 const persist = () => { if (speed === 1) fire.save(); };
 const toast = document.getElementById('toast'); let toastT;
 function hint(text) { toast.textContent = text; toast.classList.add('show'); clearTimeout(toastT); toastT = setTimeout(() => toast.classList.remove('show'), 2600); }
 function renderUI() {
-  [...seg.children].forEach((c, i) => { c.classList.toggle('sel', i === sel); c.setAttribute('aria-checked', i === sel); });
   const inFire = wood.fire.filter((l) => !l.wet).length;
   info.textContent = `${fire.isOut ? (ember > 0.02 ? 'тлеют угли' : 'костёр погас') : `в костре: ${inFire}`} · в поленнице: ${wood.pile.length}/${PILE_MAX}`;
 }
 function addLog() {
-  if (!woodView.throwOne(KINDS[sel].id)) hint('Поленница пуста — наколите дров топором у пня');
+  if (!woodView.throwOne(null)) hint('Поленница пуста — наколите дров топором у пня');
   renderUI();
 }
 function douse() {
@@ -489,7 +552,11 @@ function wake() { document.body.classList.remove('idle'); clearTimeout(idleTimer
 const overlay = document.getElementById('overlay');
 let started = false;
 // Звук: AudioContext создаётся/возобновляется только внутри жеста пользователя
-function firstInteraction() { audio.start(); if (started) return; started = true; overlay.classList.add('gone'); }
+function firstInteraction() {
+  audio.start(); if (started) return; started = true; overlay.classList.add('gone');
+  // ?owl=1 — отладка: сова и крылья через 2 и 6 с после первого жеста
+  if (params.has('owl')) { setTimeout(() => audio.owl?.(), 2000); setTimeout(() => audio.wings?.(1), 6000); }
+}
 const muteBtn = document.getElementById('mute'), fsBtn = document.getElementById('fs');
 function toggleMute() { audio.setMuted(!audio.muted); muteBtn.querySelector('span').textContent = audio.muted ? 'Звук выкл' : 'Звук'; muteBtn.classList.toggle('off', audio.muted); }
 function toggleFs() {
@@ -505,7 +572,7 @@ fsBtn.addEventListener('click', toggleFs);
 // любой жест (клик, тап, клавиша пульта) включает звук; дрова по клику на сцену НЕ добавляются
 for (const ev of ['pointerdown', 'touchend', 'click']) window.addEventListener(ev, () => { firstInteraction(); wake(); }, { capture: true });
 window.addEventListener('pointermove', wake);
-const focusables = () => [...document.querySelectorAll('#hud button, #hud input')].filter((el) => el.offsetParent !== null);
+const focusables = () => [...document.querySelectorAll('#hud button, #hud input')].filter((el) => el.offsetParent !== null && !el.disabled && !el.closest('.collapsed'));
 window.addEventListener('keydown', (e) => {
   firstInteraction(); wake();
   const list = focusables(), i = list.indexOf(document.activeElement);
@@ -600,17 +667,17 @@ function frame(now) {
   shared.uLanternPos.value.set(P.lanternFlame[0] + Math.sin(ang) * (P.lanternFlame[1] - P.lanternPivot[1]), P.lanternFlame[1]);
 
   coal.material.uniforms.uI.value = Math.min(1.3, ember * 0.9 + I * 0.5) * (0.85 + 0.15 * Math.sin(timeSec * 1.7));
-  fireGlow.material.uniforms.uI.value = I * 0.1 * flick;
+  fireGlow.material.uniforms.uI.value = I * (0.1 + 0.06 * Math.max(0, I - 1)) * flick;
   radioLed.material.uniforms.uI.value = 0.35 + 0.25 * Math.sin(timeSec * 1.2);
 
   // пламя
   const [fx, fy] = P.fire;
   burst = Math.max(0, burst - dt);
-  const fI = Math.min(1, I + burst * 0.15);
+  const fI = Math.min(1.5, I + burst * 0.15); // 8–10 поленьев — до 1.5: выше, ярче
   for (const { m, L } of flames) {
     m.visible = fI > 0.02;
     m.scale.set(L.w * (0.5 + 0.5 * fI), L.h * (0.3 + 0.7 * fI), 1);
-    m.material.uniforms.uI.value = fI; m.material.uniforms.uSize.value.set(m.scale.x, m.scale.y);
+    m.material.uniforms.uI.value = Math.min(1.2, fI); m.material.uniforms.uSize.value.set(m.scale.x, m.scale.y);
   }
   for (let k = 0; k < (0.6 + 5 * I + burst * 8) * dt; k++) if (I > 0.03 || Math.random() < 0.02)
     // искры рождаются в нижней части пламени по всей ширине и сразу расходятся в стороны
@@ -637,7 +704,9 @@ function frame(now) {
   // летучие мыши изредка пересекают небо
   nextBats -= dt;
   if (nextBats <= 0) {
-    nextBats = rand(120, 300); // редко: раз в 2–5 минут const dir = Math.random() < 0.5 ? 1 : -1, y = rand(140, 330), n = 1 + (Math.random() * 3 | 0);
+    nextBats = rand(120, 300); // редко: раз в 2–5 минут
+    const dir = Math.random() < 0.5 ? 1 : -1, y = rand(140, 330), n = 1 + (Math.random() * 3 | 0);
+    if (Math.random() < 0.6) audio.wings?.(dir);
     for (let i = 0; i < n; i++) bats.spawn({ x: dir > 0 ? -40 - i * 60 : W + 40 + i * 60, y: y + rand(-30, 30), vx: dir * rand(110, 160), life: 22, ph: rand(0, 6) });
   }
   chips.update(dt, (p, dt, k) => {

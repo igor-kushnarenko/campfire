@@ -15,7 +15,7 @@ export const SPECIES = {
   oak: { name: 'дуб', base: 3000, peak: 0.75, crackle: 0.2, coal: 1.0 },
   pine: { name: 'сосна', base: 1100, peak: 0.92, crackle: 1.0, coal: 0.4 },
 };
-export const PILE_MAX = 12, PILE_START = 9, FIRE_MAX = 7;
+export const PILE_MAX = 14, PILE_START = 12, FIRE_MAX = 10;
 export const PHASES = ['ignite', 'burn', 'smolder', 'coals'];
 
 /** Полное время горения полена (с): растёт с толщиной, у дуба самое долгое. */
@@ -44,17 +44,17 @@ export function phaseOf(species, thick, p) {
   return 'coals';
 }
 
+export const randomSprite = (rnd = Math.random) => { const k = Object.keys(SPRITES); return k[Math.floor(rnd() * k.length) % k.length]; };
 let uid = 1;
 export function makeLog(sprite, rnd = Math.random) {
   const m = SPRITES[sprite]; if (!m) throw new Error('unknown sprite ' + sprite);
   return { id: uid++, sprite, species: m.species, thick: m.thick, moisture: 0.1 + rnd() * 0.15, p: 0, wet: false, seed: rnd() };
 }
-export const randomSprite = (rnd = Math.random) => { const k = Object.keys(SPRITES); return k[Math.floor(rnd() * k.length) % k.length]; };
 
 export class Woodpile {
   constructor({ pile = null, fire = [], coal = 0, chops = 0, chopNeed = 2, rnd = Math.random } = {}) {
     this.rnd = rnd;
-    this.pile = pile ?? Array.from({ length: PILE_START }, (_, i) => makeLog(['birch_medium', 'oak_medium', 'pine_medium', 'birch_thick', 'oak_split', 'kindling', 'birch_split', 'pine_thick', 'twigs'][i % 9], rnd));
+    this.pile = pile ?? Array.from({ length: PILE_START }, () => makeLog(randomSprite(rnd), rnd));
     this.fire = fire; this.coal = coal; this.chops = chops; this.chopNeed = chopNeed;
   }
   get pileFull() { return this.pile.length >= PILE_MAX; }
@@ -82,7 +82,8 @@ export class Woodpile {
     return sum;
   }
   /** Интенсивность огня 0..1 из суммы жара поленьев (насыщение). */
-  intensity() { const h = this.heat(); return h <= 0 ? 0 : Math.min(1, 1 - Math.exp(-h * 1.15)); }
+  /** 0..1.5: ~1 при 3 поленьях, до 1.5 (мощный высокий огонь) при 8–10. */
+  intensity() { const h = this.heat(); return h <= 0 ? 0 : 1.5 * (1 - Math.exp(-h * 0.62)); }
   get burning() { return this.fire.some((l) => !l.wet && l.p < 1); }
   /** Продвинуть горение на dt секунд. raining: поленья мокнут, горят медленнее. */
   tick(dt, raining = false) {

@@ -40,3 +40,5 @@ button.on{background:rgba(120,170,255,.25);border-color:rgba(150,190,255,.45)}
 .rainlvl{display:flex;align-items:center;gap:8px;padding:2px 6px;font-size:.9em}.rainlvl span{opacity:.8;white-space:nowrap}.rainlvl input{flex:1;min-width:90px;accent-color:#8fb4ff;height:1em}.rainlvl input:focus-visible{outline:2px solid #ffb35c;outline-offset:1px}
 #toast{position:absolute;left:50%;top:6%;transform:translate(-50%,-10px);padding:.5em 1em;font-size:clamp(11px,.8vw,16px);opacity:0;transition:opacity .4s,transform .4s;pointer-events:none}
 #toast.show{opacity:1;transform:translate(-50%,0)}
+label.rainlvl{max-height:3em;overflow:hidden;transition:max-height .35s ease,opacity .35s ease,padding .35s ease}
+label.rainlvl.collapsed{max-height:0;opacity:0;padding-top:0;padding-bottom:0;pointer-events:none}

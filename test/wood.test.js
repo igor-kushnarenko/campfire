@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { Woodpile, makeLog, burnDuration, heatCurve, phaseOf, peakAt, PILE_MAX, PILE_START, saveWood, loadWood, WOOD_KEY, SPRITES } from '../src/wood.js';
+import { FIRE_MAX, Woodpile, makeLog, burnDuration, heatCurve, phaseOf, peakAt, PILE_MAX, PILE_START, saveWood, loadWood, WOOD_KEY, SPRITES } from '../src/wood.js';
 const mem = () => { const m = new Map(); return { getItem: (k) => m.get(k) ?? null, setItem: (k, v) => m.set(k, v) }; };
 const seq = (...v) => { let i = 0; return () => v[i++ % v.length]; };
 
@@ -25,12 +25,13 @@ test('phases progress ignite → burn → smolder → coals', () => {
   assert.deepEqual(ph, ['ignite', 'burn', 'smolder', 'coals']);
 });
 test('pile take/put: by species, fallback to random, shrinks and caps', () => {
-  const w = new Woodpile({ rnd: seq(0.1, 0.5, 0.9) });
-  assert.equal(w.pile.length, PILE_START);
-  const oak = w.take({ species: 'oak' }); assert.equal(oak.species, 'oak'); assert.equal(w.pile.length, PILE_START - 1);
+  assert.equal(new Woodpile().pile.length, PILE_START);
+  const w = new Woodpile({ rnd: seq(0.1, 0.5, 0.9), pile: ['birch_medium', 'oak_medium', 'pine_medium', 'oak_thick', 'twigs'].map((s) => makeLog(s)) });
+  const START = 5;
+  const oak = w.take({ species: 'oak' }); assert.equal(oak.species, 'oak'); assert.equal(w.pile.length, START - 1);
   const none = new Woodpile({ pile: [makeLog('birch_thin')] }).take({ species: 'oak' }); assert.equal(none.species, 'birch');
   assert.equal(new Woodpile({ pile: [] }).take(), null);
-  w.putBack(oak); assert.equal(w.pile.length, PILE_START);
+  w.putBack(oak); assert.equal(w.pile.length, START);
   const id = w.pile[2].id; assert.equal(w.take({ id }).id, id);
 });
 test('chop counter: a new log every 2–3 chops, nothing when pile is full', () => {
@@ -69,4 +70,20 @@ test('persistence: pile and fire progress survive reload, offline time burns', (
   const later = loadWood(s, 1000 + 600_000); assert.ok(later.fire[0].p > p);
   s.setItem(WOOD_KEY, '{bad'); assert.equal(loadWood(s, 0), null);
   assert.equal(Object.keys(SPRITES).length, 12);
+});
+
+test('fire holds 10 logs; 8–10 logs give a much stronger, capped fire', () => {
+  assert.equal(FIRE_MAX, 10); assert.ok(PILE_START >= 10 && PILE_MAX >= PILE_START);
+  const mk = (n) => { const w = new Woodpile({ pile: [] }); for (let i = 0; i < n; i++) { const l = makeLog('birch_medium', seq(0.5)); l.p = 0.3; w.addToFire(l); } return w; };
+  assert.equal(mk(12).fire.length, 10);
+  const i3 = mk(3).intensity(), i9 = mk(9).intensity();
+  assert.ok(i3 > 0.7 && i3 < 1.2, 'three logs ~1: ' + i3);
+  assert.ok(i9 > 1.3 && i9 <= 1.5, 'nine logs strong: ' + i9);
+});
+test('chopping yields random (non-cyclic) species and thickness', () => {
+  const w = new Woodpile({ pile: [] }); const got = [];
+  for (let i = 0; i < 300 && got.length < 40; i++) { const r = w.chop(); if (r.log) { got.push(r.log.sprite); w.pile.length = 0; } }
+  assert.ok(new Set(got).size >= 6);
+  const periodic = [2, 3, 4, 6, 12].some((k) => got.every((s, i) => i < k || s === got[i - k]));
+  assert.ok(!periodic);
 });

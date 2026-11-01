@@ -1,0 +1,33 @@
+import { chromium } from 'playwright-core';
+const b = await chromium.launch({ executablePath: '/usr/bin/google-chrome', args: ['--use-gl=angle','--use-angle=swiftshader','--enable-unsafe-swiftshader','--autoplay-policy=no-user-gesture-required'] });
+const p = await b.newPage({ viewport: { width: 1920, height: 1080 } });
+const errs=[]; p.on('pageerror', e => errs.push(String(e))); p.on('console', m => m.type()==='error' && errs.push(m.text()));
+const out='/workspace/campfire_layers', U='http://localhost:4173/';
+await p.addInitScript(() => localStorage.setItem('campfire.settings.v1', JSON.stringify({ rain: false, rainLevel: 0.4 })));
+await p.goto(U + '?fresh=1&owl=1'); await p.waitForTimeout(2500); await p.mouse.click(300, 150);
+// громкость совы: анализатор на шине
+await p.evaluate(() => { const a = window.__campfire.audio; const an = a.ctx.createAnalyser(); an.fftSize = 2048; a.bus.owl.connect(an); window.__an = an; window.__peak = 0;
+  setInterval(() => { const d = new Float32Array(an.fftSize); an.getFloatTimeDomainData(d); for (const v of d) window.__peak = Math.max(window.__peak, Math.abs(v)); }, 20); });
+await p.waitForTimeout(4000);
+console.log('owl', JSON.stringify(await p.evaluate(() => ({ state: window.__campfire.audio.ctx.state, lastOwl: window.__campfire.audio.lastOwl, peak: window.__peak.toFixed(3), owlGain: window.__campfire.audio.bus.owl.gain.value }))));
+await p.waitForTimeout(4000);
+console.log('wings', JSON.stringify(await p.evaluate(() => ({ lastWings: window.__campfire.audio.lastWings, peak: window.__peak.toFixed(3) }))));
+await p.screenshot({ path: out + '/v7_stars.png', clip: { x: 300, y: 0, width: 1100, height: 420 } });
+await p.screenshot({ path: out + '/v7_stars_zoom.png', clip: { x: 1100, y: 20, width: 400, height: 220 } });
+const wake = async () => { await p.mouse.move(1700, 1000); await p.mouse.move(1710, 1005); await p.waitForTimeout(300); };
+await wake(); await p.screenshot({ path: out + '/v7_menu_rain_off.png', clip: { x: 1400, y: 760, width: 520, height: 320 } });
+console.log('focus-off', await p.evaluate(() => [...document.querySelectorAll('#hud button, #hud input')].filter((el) => el.offsetParent !== null && !el.disabled && !el.closest('.collapsed')).map(e => e.id).join(',')));
+await p.evaluate(() => document.getElementById('rain').click()); await p.waitForTimeout(800); await wake();
+await p.screenshot({ path: out + '/v7_menu_rain_on.png', clip: { x: 1400, y: 760, width: 520, height: 320 } });
+console.log('focus-on', await p.evaluate(() => [...document.querySelectorAll('#hud button, #hud input')].filter((el) => el.offsetParent !== null && !el.disabled && !el.closest('.collapsed')).map(e => e.id).join(',')));
+await p.evaluate(() => document.getElementById('rain').click()); await p.waitForTimeout(300);
+// 10 поленьев
+await p.evaluate(() => { const c = window.__campfire, w = c.wood; w.fire.length = 0; const sp = ['birch_medium','oak_medium','pine_medium','birch_thick','oak_split','birch_split','pine_thick','oak_thin','birch_thin','kindling'];
+  sp.forEach((s, i) => w.fire.push({ id: 5000 + i, sprite: s, species: s.split('_')[0] === 'kindling' ? 'kindling' : s.split('_')[0], thick: 0.6, moisture: 0.1, p: 0.18 + i * 0.01, wet: false, seed: Math.random() })); c.woodView.sync(true); });
+await p.waitForTimeout(9000);
+console.log('10logs', JSON.stringify(await p.evaluate(() => ({ I: window.__campfire.wood.intensity().toFixed(2), shown: window.__campfire.state().shown.toFixed(2) }))));
+await p.mouse.move(100, 100); await p.waitForTimeout(6000);
+await p.screenshot({ path: out + '/v7_fire10.png', clip: { x: 520, y: 380, width: 900, height: 600 } });
+await p.screenshot({ path: out + '/v7_full.png' });
+await p.screenshot({ path: out + '/v7_stones.png', clip: { x: 600, y: 700, width: 560, height: 300 } });
+console.log('errors', errs); await b.close();

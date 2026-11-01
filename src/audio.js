@@ -41,7 +41,7 @@ export class Ambience {
     this.wbp = wbp;
     if (this.muted) this.master.gain.value = 0;
     this.crickets = [4300, 4650, 5050].map((f) => ({ f: f * (0.97 + Math.random() * 0.06), next: ctx.currentTime + Math.random() * 3, pan: Math.random() * 2 - 1, vol: 0.02 + Math.random() * 0.02, rest: 0 }));
-    this.nextOwl = ctx.currentTime + 40 + Math.random() * 80;
+    this.nextOwl = ctx.currentTime + 45 + Math.random() * 90;
     this.nextCrackle = ctx.currentTime;
     this.timer = setInterval(() => this.schedule(), 100);
     if (ctx.state !== 'running') ctx.resume();
@@ -136,7 +136,8 @@ export class Ambience {
     }
     if (this.rain) while (this.nextDrip < ahead) { this.drip(this.nextDrip); this.nextDrip += (this.R?.dripInterval ?? 0.15) * (0.3 + Math.random() * 1.4); }
     else this.nextDrip = now;
-    if (now > this.nextOwl) { this.owl(now + 0.1); this.nextOwl = now + 60 + Math.random() * 180; }
+    if (now > this.nextOwl) { this.owl(now + 0.1); this.nextOwl = now + 120 + Math.random() * 240; } // раз в 2–6 мин
+    if (now > (this.nextWings ??= now + 150 + Math.random() * 200)) { this.wings(Math.random() < 0.5 ? 1 : -1, now + 0.1); this.nextWings = now + 180 + Math.random() * 300; }
   }
   crackle(t, I) {
     const ctx = this.ctx, src = ctx.createBufferSource(); src.buffer = this.noise;
@@ -160,18 +161,40 @@ export class Ambience {
     let n = o.connect(g); if (pan) { pan.pan.value = c.pan; n = n.connect(pan); }
     n.connect(this.nightBus); o.start(t); o.stop(t + pulses * 0.035 + 0.05);
   }
-  owl(t) {
-    const ctx = this.ctx, base = 330 + Math.random() * 60, pan = Math.random() * 1.6 - 0.8;
-    const pattern = Math.random() < 0.5 ? [[0, 0.5], [0.9, 0.25], [1.25, 0.6]] : [[0, 0.7], [1.1, 0.8]];
-    const far = 0.05 + Math.random() * 0.06;
-    for (const [dt, len] of pattern) {
-      const s = t + dt, o = ctx.createOscillator(), g = ctx.createGain(), lp = ctx.createBiquadFilter();
-      lp.type = 'lowpass'; lp.frequency.value = 900;
-      o.frequency.setValueAtTime(base * 1.05, s); o.frequency.exponentialRampToValueAtTime(base * 0.9, s + len);
-      g.gain.setValueAtTime(0, s); g.gain.linearRampToValueAtTime(far, s + 0.08); g.gain.setTargetAtTime(0, s + len * 0.6, len * 0.25);
+  /** Сова: «у-ух» — короткая высокая нота и длинная пониже, с дыханием. */
+  owl(t = this.ctx?.currentTime + 0.05) {
+    const ctx = this.ctx; if (!ctx) return;
+    const base = 300 + Math.random() * 50, pan = Math.random() * 1.4 - 0.7, vol = 0.22 + Math.random() * 0.1;
+    const notes = [[0, 0.28, 1.08, 0.75], [0.5, 0.75, 0.94, 1]];
+    for (const [dt, len, k, a] of notes) {
+      const s = t + dt, o = ctx.createOscillator(), o2 = ctx.createOscillator(), g = ctx.createGain(), lp = ctx.createBiquadFilter();
+      lp.type = 'lowpass'; lp.frequency.value = 1100; o2.frequency.value = base * k * 2; const g2 = ctx.createGain(); g2.gain.value = 0.12;
+      o.frequency.setValueAtTime(base * k * 1.04, s); o.frequency.exponentialRampToValueAtTime(base * k * 0.93, s + len);
+      g.gain.setValueAtTime(0, s); g.gain.linearRampToValueAtTime(vol * a, s + 0.07); g.gain.setValueAtTime(vol * a, s + len * 0.6); g.gain.linearRampToValueAtTime(0, s + len);
       const p = ctx.createStereoPanner ? ctx.createStereoPanner() : null;
-      let n = o.connect(lp).connect(g); if (p) { p.pan.value = pan; n = n.connect(p); }
-      n.connect(this.owlBus); o.start(s); o.stop(s + len + 0.5);
+      o2.connect(g2).connect(lp); let n = o.connect(lp).connect(g); if (p) { p.pan.value = pan; n = n.connect(p); }
+      n.connect(this.bus.owl); o.start(s); o2.start(s); o.stop(s + len + 0.1); o2.stop(s + len + 0.1);
+      // выдох
+      const src = ctx.createBufferSource(); src.buffer = this.noise; const bp = ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = base * k; bp.Q.value = 4;
+      const gn = ctx.createGain(); gn.gain.setValueAtTime(0, s); gn.gain.linearRampToValueAtTime(vol * a * 0.5, s + 0.05); gn.gain.linearRampToValueAtTime(0, s + len);
+      src.connect(bp).connect(gn).connect(this.bus.owl); src.start(s, Math.random() * 2, len + 0.05);
     }
+    this.lastOwl = t;
   }
+  /** Хлопанье крыльев пролетающей птицы (dir — направление пролёта для панорамы). */
+  wings(dir = 1, t = this.ctx?.currentTime + 0.05) {
+    const ctx = this.ctx; if (!ctx) return;
+    const n = 5 + (Math.random() * 5 | 0), gap = 0.11 + Math.random() * 0.06;
+    for (let i = 0; i < n; i++) {
+      const s = t + i * gap * (1 + i * 0.04), src = ctx.createBufferSource(); src.buffer = this.noise;
+      const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 450 + Math.random() * 250;
+      const g = ctx.createGain(), a = 0.5 * (1 - i / (n + 2));
+      g.gain.setValueAtTime(0, s); g.gain.linearRampToValueAtTime(a, s + 0.012); g.gain.exponentialRampToValueAtTime(0.0001, s + 0.09);
+      const p = ctx.createStereoPanner ? ctx.createStereoPanner() : null;
+      let x = src.connect(lp).connect(g); if (p) { p.pan.value = Math.max(-1, Math.min(1, -dir * 0.7 + dir * 1.4 * i / n)); x = x.connect(p); }
+      x.connect(this.bus.owl); src.start(s, Math.random() * 3, 0.1);
+    }
+    this.lastWings = t;
+  }
+
 }
