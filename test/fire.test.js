@@ -69,3 +69,27 @@ test('add log gives a flare and different types burn differently', () => {
   assert.ok(a.boost > 0); assert.ok(b.fuel > a.fuel);
   assert.ok(a.tick(301_000).isOut); assert.ok(!b.tick(301_000).isOut);
 });
+import { pickEmberFade, emberLevel, EMBER_FADE_MIN, EMBER_FADE_MAX } from '../src/fire.js';
+import { loadSettings, saveSettings, toggleRain, SETTINGS_KEY } from '../src/settings.js';
+test('ember fade duration is 5..10 minutes', () => {
+  assert.equal(pickEmberFade(() => 0), 300); assert.equal(pickEmberFade(() => 1), 600);
+  for (let i = 0; i < 50; i++) { const d = pickEmberFade(); assert.ok(d >= EMBER_FADE_MIN && d <= EMBER_FADE_MAX); }
+});
+test('ember level fades monotonically to exactly 0 at the end', () => {
+  const d = 420; let prev = 2;
+  for (let t = 0; t <= d; t += 10) { const e = emberLevel(t, d, 0.8); assert.ok(e <= prev && e >= 0); prev = e; }
+  assert.equal(emberLevel(0, d, 0.8), 0.8); assert.equal(emberLevel(d, d, 0.8), 0); assert.equal(emberLevel(d + 100, d, 0.8), 0);
+  assert.ok(emberLevel(d * 0.5, d, 1) > 0.05);
+});
+test('rain toggle persists', () => {
+  const s = mem();
+  let st = loadSettings(s); assert.equal(st.rain, false);
+  st = toggleRain(st); saveSettings(st, s);
+  assert.equal(loadSettings(s).rain, true);
+  saveSettings(toggleRain(loadSettings(s)), s); assert.equal(loadSettings(s).rain, false);
+});
+test('volumes persist and are clamped', () => {
+  const s = mem(); s.setItem(SETTINGS_KEY, JSON.stringify({ volumes: { fire: 5, wind: -1, water: 'x', owl: 0.3 } }));
+  const v = loadSettings(s).volumes;
+  assert.equal(v.fire, 1); assert.equal(v.wind, 0); assert.equal(v.water, 1); assert.equal(v.owl, 0.3);
+});

@@ -116,3 +116,17 @@ for n in sorted(report):
     comp.alpha_composite(Image.open(AL + n + '.png').convert('RGBA'))
 comp.save('/workspace/campfire_layers/composite_preview.png')
 sbs = Image.new('RGB', (W * 2, H)); sbs.paste(comp.convert('RGB'), (0, 0)); sbs.paste(Image.fromarray(ref), (W, 0)); sbs.save('/workspace/campfire_layers/side_by_side.png')
+
+# ветки поленницы не должны лезть поверх камней кострища: стираем пиксели поленницы там, где есть камни
+ring_a = np.array(Image.open(AL + '11_firering.png'))[..., 3]
+wp = np.array(Image.open(AL + '13_woodpile.png').convert('RGBA'))
+mask = cv2.dilate((ring_a > 100).astype(np.uint8), np.ones((3, 3), np.uint8)) > 0
+wp[mask, 3] = 0
+Image.fromarray(wp).save(AL + '13_woodpile.png')
+Image.fromarray(wp).resize((W // 2, (H + 1) // 2), Image.LANCZOS).save('/workspace/campfire/public/layers/half/13_woodpile.png', optimize=True)
+comp = Image.new('RGBA', (W, H))
+for n in sorted(report):
+    if n == '03_clouds': continue
+    comp.alpha_composite(Image.open(AL + n + '.png').convert('RGBA'))
+comp.save('/workspace/campfire_layers/composite_preview.png')
+sbs = Image.new('RGB', (W * 2, H)); sbs.paste(comp.convert('RGB'), (0, 0)); sbs.paste(Image.fromarray(ref), (W, 0)); sbs.save('/workspace/campfire_layers/side_by_side.png')

@@ -10,11 +10,12 @@ body.idle{cursor:none}
 #overlay small{opacity:.7;font-size:.8em}
 @keyframes pulse{50%{opacity:.6}}
 #overlay.gone{opacity:0}
-#hud{position:absolute;left:50%;bottom:2.2%;transform:translateX(-50%);display:flex;flex-wrap:wrap;align-items:center;gap:6px;
-  padding:6px;font-size:clamp(11px,.8vw,17px);transition:opacity 1s,transform 1s;max-width:96vw;justify-content:center}
-body.idle #hud{opacity:0;pointer-events:none;transform:translate(-50%,8px)}
+#hud{position:absolute;right:1.4%;bottom:2%;display:flex;flex-direction:column;align-items:stretch;gap:4px;padding:5px;font-size:clamp(10px,.62vw,14px);transition:opacity 1s,transform 1s;max-width:46vw}
+#hud .row{display:flex;gap:4px;flex-wrap:wrap}
+#hud .row>button{flex:1 1 auto;justify-content:center}
+body.idle #hud{opacity:0;pointer-events:none;transform:translateY(8px)}
 button{font:inherit;color:inherit;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.1);border-radius:9px;
-  padding:.42em .8em;display:inline-flex;align-items:center;gap:.45em;cursor:pointer;transition:background .2s,border-color .2s}
+  padding:.36em .6em;display:inline-flex;align-items:center;gap:.45em;cursor:pointer;transition:background .2s,border-color .2s}
 button:hover{background:rgba(255,255,255,.13)}
 button svg{width:1.05em;height:1.05em;flex:none}
 button.primary{background:rgba(240,138,36,.28);border-color:rgba(255,170,80,.4)}
@@ -26,3 +27,13 @@ button:focus-visible{outline:2px solid #ffb35c;outline-offset:2px;box-shadow:0 0
 .seggroup .seg.sel{background:rgba(255,190,120,.22);opacity:1}
 .sep{width:1px;height:1.4em;background:rgba(255,255,255,.14);margin:0 2px}
 #info{flex-basis:100%;text-align:center;font-size:.82em;opacity:.65;padding:0 4px 2px}
+button.on{background:rgba(120,170,255,.25);border-color:rgba(150,190,255,.45)}
+.seggroup{width:100%;box-sizing:border-box}.seggroup .seg{flex:1}
+#volumes{display:grid;grid-template-columns:auto 1fr;gap:2px 8px;padding:4px 6px;background:rgba(0,0,0,.2);border-radius:9px}
+#volumes[hidden]{display:none}
+.vol{display:contents}.vol span{opacity:.8;font-size:.9em;align-self:center}
+.vol input{width:100%;min-width:90px;accent-color:#f0a050;height:1em}
+.vol input:focus-visible{outline:2px solid #ffb35c;outline-offset:1px}
+.test{border:1px dashed rgba(255,120,120,.5);align-items:center;flex-wrap:wrap}
+.test .tlabel{font-size:.75em;color:#ff9a9a;padding:0 .4em;flex-basis:100%;text-align:center}
+#info{font-size:.8em}

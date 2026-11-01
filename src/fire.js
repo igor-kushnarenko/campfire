@@ -4,6 +4,14 @@ export const DEFAULT_LOGS = [
   { id: 'birch', name: 'берёза', seconds: 20 * 60 },
   { id: 'oak', name: 'дуб', seconds: 45 * 60 },
 ];
+/** Сколько тлеют угли после того, как огонь погас: случайно 5–10 минут (в секундах). */
+export const EMBER_FADE_MIN = 5 * 60, EMBER_FADE_MAX = 10 * 60;
+export function pickEmberFade(rnd = Math.random) { return EMBER_FADE_MIN + rnd() * (EMBER_FADE_MAX - EMBER_FADE_MIN); }
+/** Яркость углей через t секунд после угасания (start — яркость в момент угасания). Плавно до нуля к концу. */
+export function emberLevel(t, duration, start = 1) {
+  if (t <= 0) return start; if (t >= duration) return 0;
+  const x = t / duration; return start * (1 - x) * (1 - x * 0.5) * (1 - x) ** 0.5;
+}
 /** Пояснение для меню: сколько горит полено. */
 export function describeLog(log) {
   const m = Math.round(log.seconds / 60);

@@ -1,6 +1,9 @@
 // Медитативный пиксельный костёр у озера. Слои — PNG пользователя, вся анимация и свет — в коде.
 import * as THREE from 'three';
-import { Fire, DEFAULT_LOGS, describeLog } from './fire.js';
+import { Fire, DEFAULT_LOGS, describeLog, pickEmberFade, emberLevel } from './fire.js';
+import { SOUND_LAYERS, loadSettings, saveSettings, toggleRain } from './settings.js';
+// Временные тестовые кнопки скорости времени. Чтобы убрать — поставить false.
+const TEST_CONTROLS = true;
 import { Ambience } from './audio.js';
 
 const W = 1672, H = 941;
@@ -16,7 +19,7 @@ const SPEED = Math.max(1, Number(params.get('speed')) || 1); // ?speed=60 — у
 
 // Ключевые точки сцены (по выровненным слоям)
 const P = {
-  fire: [790, 752], lanternPivot: [377, 214], lanternFlame: [377, 292],
+  fire: [790, 752], lanternPivot: [377, 168], lanternRing: [377, 222], lanternFlame: [377, 292],
   mug: [372, 626], radio: [318, 806], moon: [1376, 123], horizon: 446,
 };
 
@@ -35,7 +38,7 @@ const KIND = { plain: 0, sky: 1, cloud: 2, lake: 3 };
 const layerVert = `varying vec2 vUv; void main(){ vUv=uv; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.); }`;
 const common = `
   uniform float uTime,uFire,uEmber,uLit,uAmb,uLanternLit,uKind,uFlick;
-  uniform vec2 uFirePos,uLanternPos,uMoon,uCloudOff;
+  uniform vec2 uFirePos,uLanternPos,uMoon,uCloudOff; uniform float uRain;
   uniform sampler2D map,uRefl1,uRefl2;
   varying vec2 vUv;
   const vec2 WH=vec2(${W}.,${H}.);
@@ -83,11 +86,21 @@ const layerFrag = common + `
     }
     if (uKind==3.) { // озеро: отражения, лунная дорожка, рябь
       float k = clamp((p.y-${P.horizon}.)/420.,0.,1.);
-      vec2 rp = vec2(p.x + ripple*2., 2.*${P.horizon}. - p.y);
+      float dd = p.y - ${P.horizon}.;
+      vec2 rp = vec2(p.x + ripple*2. + sin(sq.y*0.9 + uTime*1.6)*(1.+dd*0.025), 2.*${P.horizon}. - p.y);
       vec4 r1 = tex(uRefl1,rp), r2 = tex(uRefl2,rp + vec2(0.,6.));
       vec3 refl = mix(r1.rgb*r1.a, r2.rgb, r2.a);
       float ra = max(r1.a,r2.a);
-      col = mix(col, refl*0.55, ra*0.32*(1.-k));
+      // отражение гор/берегов: прозрачное (≤0.2) и тает по мере удаления от дальнего берега
+      float fadeR = 1. - smoothstep(0., 190., dd);
+      col = mix(col, refl*0.85, ra*0.2*fadeR*fadeR);
+      if (uRain > 0.01) { // круги от капель
+        vec2 g = sq/vec2(30.,11.); vec2 cc = floor(g); float h = hash(cc);
+        float ph = fract(uTime*0.6 + h*7.); vec2 f = (fract(g)-.5)*vec2(30.,11.);
+        float r = length(f*vec2(1.,2.6));
+        float ring = smoothstep(1.6, 0., abs(r - ph*12.)) * (1.-ph) * step(.5, h);
+        col += vec3(.45,.5,.62)*ring*.4*uRain;
+      }
       float w = 14. + (p.y-${P.horizon}.)*0.32;
       float dx = abs(sq.x + ripple*3. - uMoon.x);
       float band = smoothstep(w, w*0.25, dx);
@@ -116,7 +129,7 @@ function loadTex(name) {
 const shared = {
   uTime: { value: 0 }, uFire: { value: 0 }, uEmber: { value: 0 }, uFlick: { value: 1 }, uLanternLit: { value: 0.8 },
   uFirePos: { value: new THREE.Vector2(...P.fire) }, uLanternPos: { value: new THREE.Vector2(...P.lanternFlame) },
-  uMoon: { value: new THREE.Vector2(...P.moon) }, uCloudOff: { value: new THREE.Vector2() },
+  uMoon: { value: new THREE.Vector2(...P.moon) }, uCloudOff: { value: new THREE.Vector2() }, uRain: { value: 0 },
 };
 const plane = new THREE.PlaneGeometry(W, H);
 let order = 0;
@@ -215,10 +228,57 @@ const cloudMat = new THREE.ShaderMaterial({ vertexShader: layerVert, transparent
   }` });
 const clouds = new THREE.Mesh(plane, cloudMat); clouds.position.set(W / 2, H / 2, 0); clouds.renderOrder = order++; scene.add(clouds);
 const mountains = layer('04_mountains', { lit: 0 });
+// лёгкий туман в низинах: мягкая полоса fbm, медленно плывёт
+const fogFrag = `uniform float uTime,uY0,uY1,uA; varying vec2 vUv;
+  float hash(vec2 p){ return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453); }
+  float noise(vec2 p){ vec2 i=floor(p),f=fract(p); f=f*f*(3.-2.*f);
+    return mix(mix(hash(i),hash(i+vec2(1,0)),f.x),mix(hash(i+vec2(0,1)),hash(i+vec2(1,1)),f.x),f.y); }
+  float fbm(vec2 p){ float v=0.,a=.5; for(int i=0;i<4;i++){ v+=a*noise(p); p=p*2.05+vec2(1.3,2.1); a*=.5; } return v; }
+  void main(){
+    vec2 p = vec2(vUv.x*${W}., (1.-vUv.y)*${H}.);
+    p = (floor(p/${PIX.toFixed(4)})+.5)*${PIX.toFixed(4)};
+    float h = uY1 - uY0;
+    float band = smoothstep(uY0, uY0 + h*.45, p.y) * smoothstep(uY1, uY1 - h*.45, p.y);
+    float d = fbm(vec2(p.x*.0045 - uTime*.006, p.y*.035 + uTime*.003));
+    float a = band * smoothstep(.38, .8, d) * uA;
+    if (a < .004) discard;
+    gl_FragColor = vec4(.48,.55,.68, a);
+  }`;
+function fog(y0, y1, a) {
+  const m = new THREE.Mesh(plane, new THREE.ShaderMaterial({ vertexShader: layerVert, fragmentShader: fogFrag, transparent: true, depthTest: false, depthWrite: false,
+    uniforms: { uTime: shared.uTime, uY0: { value: y0 }, uY1: { value: y1 }, uA: { value: a } } }));
+  m.position.set(W / 2, H / 2, 0); m.renderOrder = order++; scene.add(m); return m;
+}
+fog(340, 425, 0.26); // между подножием гор и дальним берегом
 const shore = layer('05_far_shore', { lit: 0, amb: 0.95 });
 const lake = layer('06_lake', { kind: 'lake', lit: 0.15 });
 lake.material.uniforms.uRefl1.value = mountains.material.uniforms.map.value;
 lake.material.uniforms.uRefl2.value = shore.material.uniforms.map.value;
+fog(425, 500, 0.2); // над дальней водой
+// дождь: тонкие пиксельные штрихи под небольшим углом, два слоя глубины
+const rainFrag = `uniform float uTime,uRain,uNear; varying vec2 vUv;
+  float hash(vec2 p){ return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453); }
+  void main(){
+    vec2 p = vec2(vUv.x*${W}., (1.-vUv.y)*${H}.);
+    float px = ${PIX.toFixed(4)} * (uNear > .5 ? 1. : .75);
+    p = (floor(p/px)+.5)*px;
+    float x = p.x + p.y*.2;                         // наклон
+    float c = floor(x/px);
+    float h = hash(vec2(c, uNear)), h2 = hash(vec2(c*1.7, 3.+uNear));
+    if (h2 > (uNear > .5 ? .35 : .55)) discard;      // разреженность
+    float speed = uNear > .5 ? 950. : 560.;
+    float per = uNear > .5 ? 300. : 200., len = uNear > .5 ? 26. : 13.;
+    float m = mod(p.y - uTime*speed*(.85+.3*h) + h*per*9., per);
+    if (m > len) discard;
+    float a = (uNear > .5 ? .32 : .2) * uRain * (m/len);
+    gl_FragColor = vec4(.72,.78,.9, a);
+  }`;
+function rainLayer(near) {
+  const m = new THREE.Mesh(plane, new THREE.ShaderMaterial({ vertexShader: layerVert, fragmentShader: rainFrag, transparent: true, depthTest: false, depthWrite: false,
+    uniforms: { uTime: shared.uTime, uRain: shared.uRain, uNear: { value: near ? 1 : 0 } } }));
+  m.position.set(W / 2, H / 2, 0); m.renderOrder = order++; scene.add(m); return m;
+}
+const rainFar = rainLayer(false);
 layer('07_forest_mid', { lit: 0.5, amb: 0.9 });
 const bats = new Particles(12, THREE.NormalBlending); scene.add(bats.points);
 layer('08_ground', { lit: 1.2 });
@@ -227,6 +287,21 @@ layer('09_tree', { lit: 1.5 });
 const lanternPivot = new THREE.Group(); lanternPivot.position.set(P.lanternPivot[0], wy(P.lanternPivot[1]), 0); scene.add(lanternPivot);
 const lanternMesh = layer('10_lantern', { lit: 0.6 }); scene.remove(lanternMesh);
 lanternMesh.position.set(W / 2 - P.lanternPivot[0], H / 2 - wy(P.lanternPivot[1]), 0); lanternPivot.add(lanternMesh);
+// цепочка от ветки до кольца фонаря — качается вместе с ним (точка подвеса на ветке)
+const chainLen = P.lanternRing[1] - P.lanternPivot[1] + 4;
+const chain = new THREE.Mesh(new THREE.PlaneGeometry(PIX * 3, chainLen), new THREE.ShaderMaterial({ vertexShader: layerVert, transparent: true, depthTest: false, depthWrite: false,
+  uniforms: { uLit: shared.uLanternLit, uFire: shared.uFire },
+  fragmentShader: `uniform float uLit,uFire; varying vec2 vUv;
+  void main(){
+    float rows = ${(chainLen / PIX).toFixed(2)};
+    float cx = floor(vUv.x*3.), cy = floor(vUv.y*rows);
+    bool on = mod(cy, 2.) < 1. ? (cx != 1.) : (cx == 1.);   // звенья: «кольцо» / «ребро» по очереди
+    if (!on) discard;
+    vec3 iron = vec3(.16,.14,.13) + vec3(.55,.32,.14)*(uLit*.45 + uFire*.25) * (cx == 0. ? 1. : .6);
+    gl_FragColor = vec4(iron, 1.);
+  }` }));
+chain.position.set(0, -chainLen / 2 + 2, 0);
+chain.renderOrder = lanternMesh.renderOrder - 0.5; lanternPivot.add(chain);
 const lanternFlame = glow(14, 22, [1.0, 0.75, 0.35]);
 const lanternGlow = glow(170, 170, [0.9, 0.5, 0.18]);
 for (const g of [lanternFlame, lanternGlow]) { g.position.set(P.lanternFlame[0] - P.lanternPivot[0], -(P.lanternFlame[1] - P.lanternPivot[1]), 0); lanternPivot.add(g); }
@@ -304,24 +379,52 @@ const smoke = new Particles(160, THREE.NormalBlending); scene.add(smoke.points);
 smoke.points.material.uniforms.uCells.value = 14; steam.points.material.uniforms.uCells.value = 8; // дым мягче искр
 const fireGlow = glow(700, 420, [1.0, 0.42, 0.12]); fireGlow.position.set(P.fire[0], wy(P.fire[1] - 60), 0); scene.add(fireGlow);
 layer('16_foreground', { lit: 0.9 });
+const rainNear = rainLayer(true);
 
 // апскейл ближайшим соседом + лёгкая виньетка
 const post = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), new THREE.ShaderMaterial({
-  uniforms: { t: { value: rt.texture } }, depthTest: false,
+  uniforms: { t: { value: rt.texture }, uRain: shared.uRain }, depthTest: false,
   vertexShader: `varying vec2 vUv; void main(){ vUv=uv; gl_Position=vec4(position.xy,0.,1.); }`,
-  fragmentShader: `uniform sampler2D t; varying vec2 vUv; void main(){ vec3 c=texture2D(t,vUv).rgb;
+  fragmentShader: `uniform sampler2D t; uniform float uRain; varying vec2 vUv; void main(){ vec3 c=texture2D(t,vUv).rgb;
+    c = mix(c, vec3(dot(c, vec3(.3,.59,.11)))*vec3(.92,.96,1.05), .28*uRain) * (1. - .14*uRain); // дождь: темнее и бледнее
     vec2 q=vUv-.5; c*=1.-dot(q,q)*0.55; gl_FragColor=vec4(c,1.); }` }));
 const postScene = new THREE.Scene(); postScene.add(post); const postCam = new THREE.Camera();
 
 // ---------- состояние и логика костра ----------
-const t0 = performance.now(), clock0 = Date.now();
-const vnow = () => clock0 + (performance.now() - t0) * SPEED;
+let vclock = Date.now(), speed = SPEED; // виртуальные часы костра (тестовые кнопки меняют speed)
+const vnow = () => vclock;
 const fuelParam = params.get('fuel'); // ?fuel=60: стартовый запас в секундах (отладка)
 const fire = fuelParam !== null ? new Fire({ fuel: Number(fuelParam), now: vnow() })
   : SPEED === 1 ? Fire.load(localStorage, vnow()) : new Fire({ now: vnow() });
-let shown = 0, ember = 0, doused = 0; // doused: секунд с момента тушения (0 — не тушили)
+let shown = 0, ember = 0, doused = 0, outAt = null, fadeDur = 420, emberStart = 0; // doused: секунд с момента тушения (0 — не тушили)
 const audio = new Ambience();
 let sel = 1, burst = 0;
+let settings = loadSettings();
+audio.setVolumes(settings.volumes); audio.setRain(settings.rain);
+shared.uRain.value = settings.rain ? 1 : 0;
+const rainBtn = document.getElementById('rain');
+function renderRain() { rainBtn.classList.toggle('on', settings.rain); rainBtn.setAttribute('aria-pressed', settings.rain); }
+rainBtn.addEventListener('click', () => { settings = toggleRain(settings); saveSettings(settings); audio.setRain(settings.rain); renderRain(); });
+renderRain();
+const volPanel = document.getElementById('volumes'), volBtn = document.getElementById('volbtn');
+for (const { id, name } of SOUND_LAYERS) {
+  const row = document.createElement('label'); row.className = 'vol';
+  row.innerHTML = `<span>${name}</span><input type="range" min="0" max="100" step="5">`;
+  const inp = row.querySelector('input'); inp.value = Math.round(settings.volumes[id] * 100);
+  inp.addEventListener('input', () => { settings.volumes[id] = inp.value / 100; audio.setVolumes({ [id]: settings.volumes[id] }); saveSettings(settings); });
+  volPanel.appendChild(row);
+}
+volBtn.addEventListener('click', () => { volPanel.hidden = !volPanel.hidden; volBtn.setAttribute('aria-expanded', !volPanel.hidden); });
+const testRow = document.getElementById('testrow');
+if (TEST_CONTROLS) {
+  testRow.hidden = false;
+  for (const v of [0.5, 1, 10, 60]) {
+    const b = document.createElement('button'); b.type = 'button'; b.className = 'seg'; b.textContent = '×' + v;
+    b.addEventListener('click', () => { speed = v; [...testRow.querySelectorAll('button')].forEach((x) => x.classList.toggle('sel', x === b)); });
+    if (v === speed) b.classList.add('sel');
+    testRow.appendChild(b);
+  }
+} else testRow.remove();
 
 const seg = document.getElementById('logtype'), info = document.getElementById('info');
 DEFAULT_LOGS.forEach((l, i) => {
@@ -329,7 +432,7 @@ DEFAULT_LOGS.forEach((l, i) => {
   b.setAttribute('role', 'radio');
   b.addEventListener('click', () => { sel = i; renderUI(); }); seg.appendChild(b);
 });
-const persist = () => { if (SPEED === 1 && fuelParam === null) fire.save(); };
+const persist = () => { if (speed === 1 && fuelParam === null) fire.save(); };
 function renderUI() {
   [...seg.children].forEach((c, i) => { c.classList.toggle('sel', i === sel); c.setAttribute('aria-checked', i === sel); });
   const mins = Math.ceil(fire.fuel / 60);
@@ -366,12 +469,17 @@ fsBtn.addEventListener('click', toggleFs);
 // любой жест (клик, тап, клавиша пульта) включает звук; дрова по клику на сцену НЕ добавляются
 for (const ev of ['pointerdown', 'touchend', 'click']) window.addEventListener(ev, () => { firstInteraction(); wake(); }, { capture: true });
 window.addEventListener('pointermove', wake);
-const focusables = () => [...document.querySelectorAll('#hud button')];
+const focusables = () => [...document.querySelectorAll('#hud button, #hud input')].filter((el) => el.offsetParent !== null);
 window.addEventListener('keydown', (e) => {
   firstInteraction(); wake();
   const list = focusables(), i = list.indexOf(document.activeElement);
   const k = e.key;
-  if (k === 'ArrowLeft' || k === 'ArrowRight') { // навигация пультом между кнопками
+  const onRange = document.activeElement?.type === 'range';
+  if (onRange && (k === 'ArrowLeft' || k === 'ArrowRight')) { /* ползунок громкости — стрелки двигают его */ }
+  else if (k === 'ArrowUp' || k === 'ArrowDown') {
+    const n = i < 0 ? list.indexOf(document.getElementById('add')) : (i + (k === 'ArrowDown' ? 1 : -1) + list.length) % list.length;
+    list[n].focus(); e.preventDefault();
+  } else if (k === 'ArrowLeft' || k === 'ArrowRight') { // навигация пультом между кнопками
     const n = i < 0 ? list.indexOf(document.getElementById('add')) : (i + (k === 'ArrowRight' ? 1 : -1) + list.length) % list.length;
     list[n].focus(); e.preventDefault();
   } else if ((k === 'Enter' || k === ' ') && i < 0) { document.getElementById('add').focus(); e.preventDefault(); } // первое OK — показать фокус
@@ -398,17 +506,22 @@ addEventListener('resize', resize); resize();
 
 // ---------- кадр ----------
 const rand = (a, b) => a + Math.random() * (b - a);
-let last = performance.now(), nextBats = 6, saveAt = 0, timeSec = 0;
+let last = performance.now(), nextBats = 60 + Math.random() * 120, saveAt = 0, timeSec = 0;
 function frame(now) {
-  const dt = Math.min(0.1, (now - last) / 1000); last = now; timeSec += dt;
+  const realDt = Math.max(0, (now - last) / 1000), dt = Math.min(0.1, realDt); last = now; timeSec += dt;
+  vclock += realDt * 1000 * speed;
+  shared.uRain.value += ((settings.rain ? 1 : 0) - shared.uRain.value) * (1 - Math.exp(-dt * 0.5));
   fire.tick(vnow());
-  const target = fire.intensity;
+  const target = fire.intensity * (settings.rain ? 0.8 : 1); // под дождём огонь чуть приглушён
   // огонь разгорается за несколько секунд и угасает медленно
   if (doused > 0) doused += dt;
   const downRate = doused > 0 ? 2.5 : 0.08; // после тушения пламя гаснет за ~1–2 с
   shown += (target - shown) * (target > shown ? 1 - Math.exp(-dt * 0.6) : 1 - Math.exp(-dt * downRate));
-  if (fire.fuel > 0) ember = Math.max(ember, 0.25 + 0.5 * shown);
-  else ember = Math.max(0, ember - dt * (doused > 0 ? 0.75 / 15 : SPEED / 240)); // угли гаснут ~15 с после тушения
+  if (fire.fuel > 0) { ember = Math.max(ember, 0.25 + 0.5 * shown); outAt = null; }
+  else { // угли полностью гаснут за 5–10 минут (и после тушения, и когда прогорело само)
+    if (outAt === null) { outAt = vclock; fadeDur = pickEmberFade(); emberStart = ember; }
+    ember = emberLevel((vclock - outAt) / 1000, fadeDur, emberStart);
+  }
   const I = fire.isOut ? Math.min(shown, doused > 0 ? shown : ember * 0.3) : shown;
   const flick = 0.82 + 0.1 * Math.sin(timeSec * 9.1) + 0.08 * Math.sin(timeSec * 23.7 + Math.sin(timeSec * 3.3)) + rand(-0.04, 0.04);
   Object.assign(shared.uTime, { value: timeSec }); shared.uFire.value = I; shared.uEmber.value = ember; shared.uFlick.value = flick;
@@ -421,7 +534,7 @@ function frame(now) {
   const lf = 0.85 + 0.15 * Math.sin(timeSec * 7 + Math.sin(timeSec * 2.1) * 2);
   lanternFlame.material.uniforms.uI.value = 1.5 * lf; lanternGlow.material.uniforms.uI.value = 0.6 * lf;
   shared.uLanternLit.value = 0.75 * lf;
-  shared.uLanternPos.value.set(P.lanternFlame[0] + Math.sin(ang) * 78, P.lanternFlame[1]);
+  shared.uLanternPos.value.set(P.lanternFlame[0] + Math.sin(ang) * (P.lanternFlame[1] - P.lanternPivot[1]), P.lanternFlame[1]);
 
   coal.material.uniforms.uI.value = Math.min(1.3, ember * 0.9 + I * 0.5) * (0.85 + 0.15 * Math.sin(timeSec * 1.7));
   fireGlow.material.uniforms.uI.value = I * 0.1 * flick;
@@ -437,13 +550,14 @@ function frame(now) {
     m.material.uniforms.uI.value = fI; m.material.uniforms.uSize.value.set(m.scale.x, m.scale.y);
   }
   for (let k = 0; k < (0.6 + 5 * I + burst * 8) * dt; k++) if (I > 0.03 || Math.random() < 0.02)
-    sparks.spawn({ x: fx + rand(-40, 40), y: fy - 60 - 120 * I, vx: rand(-30, 30), vy: -rand(120, 300) * (0.5 + I), life: rand(1, 2.8), ph: rand(0, 6) });
+    // искры рождаются в нижней части пламени по всей ширине и сразу расходятся в стороны
+    sparks.spawn({ x: fx + rand(-1, 1) * (70 + 70 * I), y: fy - rand(5, 45) * (0.5 + I), vx: rand(-60, 60), vy: -rand(90, 240) * (0.5 + 0.7 * I), life: rand(0.9, 2.4), ph: rand(0, 6), drift: rand(20, 70) });
   sparks.update(dt, (p, dt, k) => {
-    p.x += (p.vx + Math.sin(timeSec * 3 + p.ph) * 40) * dt; p.y += p.vy * dt; p.vy *= 1 - dt * 0.8;
+    p.x += (p.vx + Math.sin(timeSec * (1.5 + p.ph * 0.4) + p.ph) * p.drift) * dt; p.y += p.vy * dt; p.vy *= 1 - dt * 0.8;
     return { r: 1, g: 0.7 - k * 0.3, b: 0.3 - k * 0.2, size: 4 - k * 1.5, a: Math.pow(1 - k, 1.5) * 0.85 };
   });
   // дым
-  const smokeAmt = 2 + I * 6 + (fire.isOut ? ember * 8 : 0) + (doused > 0 && doused < 6 ? 25 : 0);
+  const smokeAmt = (fire.isOut ? ember * 7 : 2 + I * 6) + (doused > 0 && doused < 6 ? 25 : 0); // дым сходит на нет вместе с углями
   for (let k = 0; k < smokeAmt * dt; k++) smoke.spawn({ x: fx + rand(-30, 30), y: fy - 40 - 150 * I, vx: rand(-6, 6), vy: -rand(25, 45), life: rand(5, 8) });
   smoke.update(dt, (p, dt, k) => {
     p.x += (p.vx + 9 + Math.sin(timeSec * 0.7 + p.life) * 8) * dt; p.y += p.vy * dt;
@@ -460,7 +574,7 @@ function frame(now) {
   // летучие мыши изредка пересекают небо
   nextBats -= dt;
   if (nextBats <= 0) {
-    nextBats = rand(25, 70); const dir = Math.random() < 0.5 ? 1 : -1, y = rand(140, 330), n = 1 + (Math.random() * 3 | 0);
+    nextBats = rand(120, 300); // редко: раз в 2–5 минут const dir = Math.random() < 0.5 ? 1 : -1, y = rand(140, 330), n = 1 + (Math.random() * 3 | 0);
     for (let i = 0; i < n; i++) bats.spawn({ x: dir > 0 ? -40 - i * 60 : W + 40 + i * 60, y: y + rand(-30, 30), vx: dir * rand(110, 160), life: 22, ph: rand(0, 6) });
   }
   bats.update(dt, (p, dt) => {
@@ -477,4 +591,4 @@ function frame(now) {
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);
-window.__campfire = { fire, addLog, douse, audio, state: () => ({ shown, ember, fuel: fire.fuel, doused, audio: audio.ctx?.state ?? 'none' }) };
+window.__campfire = { fire, addLog, douse, audio, state: () => ({ shown, ember, fuel: fire.fuel, doused, audio: audio.ctx?.state ?? 'none', rain: settings.rain, speed, outAt, fadeDur }), setSpeed: (v) => { speed = v; } };
