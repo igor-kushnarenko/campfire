@@ -15,7 +15,7 @@ export class Ambience {
     this.roarGain = ctx.createGain(); this.roarGain.gain.value = 0;
     // слои звука, у каждого своя громкость (регуляторы в меню)
     this.bus = {};
-    for (const k of ['fire', 'crickets', 'water', 'wind', 'owl', 'rain']) { const g = ctx.createGain(); g.connect(this.master); this.bus[k] = g; }
+    for (const k of ['fire', 'crickets', 'water', 'wind', 'owl', 'rain', 'fx']) { const g = ctx.createGain(); g.connect(this.master); this.bus[k] = g; }
     roar.connect(lp).connect(this.roarGain).connect(this.bus.fire); roar.start();
     this.crackleBus = ctx.createGain(); this.crackleBus.connect(this.bus.fire);
     this.nightBus = ctx.createGain(); this.nightBus.gain.value = 0.5; this.nightBus.connect(this.bus.crickets);
@@ -84,13 +84,31 @@ export class Ambience {
     const g = ctx.createGain(); g.gain.setValueAtTime((0.05 + Math.random() * 0.08) * (this.R?.dripGain ?? 1), t); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.03);
     src.connect(bp).connect(g).connect(this.bus.rain); src.start(t, Math.random() * 3, 0.04);
   }
-  /** Глухой стук полена. */
-  thud() {
+  /** Глухой стук полена (vol 0..1). */
+  thud(vol = 1) {
     const ctx = this.ctx; if (!ctx) return; const t = ctx.currentTime;
-    const o = ctx.createOscillator(), g = ctx.createGain(); o.frequency.setValueAtTime(140, t); o.frequency.exponentialRampToValueAtTime(55, t + 0.15);
-    g.gain.setValueAtTime(0.35, t); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.25);
-    o.connect(g).connect(this.master); o.start(t); o.stop(t + 0.3);
+    const o = ctx.createOscillator(), g = ctx.createGain(); o.frequency.setValueAtTime(150, t); o.frequency.exponentialRampToValueAtTime(52, t + 0.16);
+    g.gain.setValueAtTime(0.45 * vol, t); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.28);
+    o.connect(g).connect(this.bus.fx); o.start(t); o.stop(t + 0.3);
+    this.noiseHit(t, 900, 1.2, 0.25 * vol, 0.06);
   }
+  noiseHit(t, freq, q, amp, dur, type = 'bandpass') {
+    const ctx = this.ctx, src = ctx.createBufferSource(); src.buffer = this.noise;
+    const f = ctx.createBiquadFilter(); f.type = type; f.frequency.value = freq; f.Q.value = q;
+    const g = ctx.createGain(); g.gain.setValueAtTime(amp, t); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    src.connect(f).connect(g).connect(this.bus.fx); src.start(t, Math.random() * 3, dur + 0.02);
+  }
+  /** Удар топора: глухой «тук» по дереву + сухой треск. */
+  chop() {
+    const ctx = this.ctx; if (!ctx) return; const t = ctx.currentTime;
+    this.thud(0.9); this.noiseHit(t + 0.005, 2600, 2.5, 0.35, 0.05); this.noiseHit(t + 0.03, 1400, 1.5, 0.18, 0.12);
+  }
+  /** Сосна стреляет: резкий щелчок. */
+  pop() { const ctx = this.ctx; if (!ctx) return; const t = ctx.currentTime; this.noiseHit(t, 3000 + Math.random() * 2500, 0.9, 0.5, 0.025, 'highpass'); }
+  /** Мокрое полено шипит под дождём. */
+  wetHiss() { const ctx = this.ctx; if (!ctx) return; const t = ctx.currentTime; this.noiseHit(t + 0.2, 5000, 0.6, 0.12, 1.8, 'highpass'); }
+  grab() { const ctx = this.ctx; if (!ctx) return; this.noiseHit(ctx.currentTime, 700, 1, 0.08, 0.05); }
+
   schedule() {
     const ctx = this.ctx, now = ctx.currentTime, ahead = now + 0.3, I = this.intensity;
     // гул: случайные медленные «вдохи»
