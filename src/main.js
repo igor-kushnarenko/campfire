@@ -3,6 +3,7 @@ import * as THREE from 'three';
 import { pickEmberFade, emberLevel } from './fire.js';
 import { Woodpile, loadWood, saveWood, makeLog, SPECIES, heatCurve, PILE_MAX } from './wood.js';
 import { WoodView } from './woodview.js';
+import { Tuner } from './radio.js';
 import { SOUND_LAYERS, loadSettings, saveSettings, toggleRain, toggleRadio, setRadioVol, setRainLevel, rainParams } from './settings.js';
 // Временные тестовые кнопки скорости времени. Чтобы убрать — поставить false.
 const TEST_CONTROLS = true;
@@ -22,7 +23,7 @@ const SPEED = Math.max(1, Number(params.get('speed')) || 1); // ?speed=60 — у
 // Ключевые точки сцены (по выровненным слоям)
 const P = {
   fire: [790, 752], lanternPivot: [377, 168], lanternRing: [377, 222], lanternFlame: [377, 292],
-  mug: [372, 626], radio: [318, 806], radioBtn: [218, 810], moon: [1376, 123], horizon: 446,
+  mug: [372, 626], radio: [318, 806], radioBtn: [218, 810], radioKnob: [320, 830], moon: [1376, 123], horizon: 446,
 };
 
 const canvas = document.getElementById('c');
@@ -453,7 +454,7 @@ const steam = new Particles(80, THREE.NormalBlending); scene.add(steam.points);
 // радио: кнопка-диод слева на корпусе (красный — выкл., зелёный — вкл.) и оранжевый ореол при наведении
 const radioHalo = glow(64, 64, [1.0, 0.55, 0.15]); radioHalo.position.set(P.radioBtn[0], wy(P.radioBtn[1]), 0); scene.add(radioHalo);
 const radioLed = glow(16, 16, [1.0, 0.12, 0.08]); radioLed.position.set(P.radioBtn[0], wy(P.radioBtn[1]), 0); scene.add(radioLed);
-let radioHover = 0, radioHoverT = 0;
+let radioHover = 0, radioHoverT = 0, knobAngle = 0;
 const smoke = new Particles(160, THREE.NormalBlending); scene.add(smoke.points);
 smoke.points.material.uniforms.uCells.value = 14; steam.points.material.uniforms.uCells.value = 8; // дым мягче искр
 const fireGlow = glow(700, 420, [1.0, 0.42, 0.12]); fireGlow.position.set(P.fire[0], wy(P.fire[1] - 60), 0); scene.add(fireGlow);
@@ -510,23 +511,42 @@ renderRain();
 // ---------- радио ----------
 const radioBtn = document.getElementById('radio'), radioVolEl = document.getElementById('radiovol');
 audio.setRadio(settings.radio, settings.radioVol);
+const stationEl = document.getElementById('station');
+const tuner = new Tuner({ audio, onName: (name) => {
+  stationEl.textContent = name || (navigator.onLine ? 'нет сигнала' : 'нет сети — только эфир');
+  if (name) { settings.radioStation = tuner.cur()?.id || ''; saveSettings(settings); }
+} });
+tuner.setVolume(settings.radioVol);
+const tunerReady = tuner.load();
+let audioUnlocked = false;
+function syncTuner() { tunerReady.then(() => { if (settings.radio && audioUnlocked) { if (tuner.state === 'off') { stationEl.textContent = 'настройка…'; tuner.setOn(true, settings.radioStation); } } else if (!settings.radio) tuner.setOn(false); }); }
 function renderRadio() {
   radioBtn.classList.toggle('on', settings.radio); radioBtn.setAttribute('aria-pressed', settings.radio);
   const box = document.querySelector('label.radiovol'); box.classList.toggle('collapsed', !settings.radio);
-  radioVolEl.disabled = !settings.radio; radioVolEl.tabIndex = settings.radio ? 0 : -1;
+  for (const el of [radioVolEl, document.getElementById('stprev'), document.getElementById('stnext')]) { el.disabled = !settings.radio; el.tabIndex = settings.radio ? 0 : -1; }
   if (!settings.radio && document.activeElement === radioVolEl) radioBtn.focus();
 }
-function switchRadio() { firstInteraction(); settings = toggleRadio(settings); saveSettings(settings); audio.radioClick(); audio.setRadio(settings.radio, settings.radioVol); renderRadio(); }
+function switchRadio() { firstInteraction(); settings = toggleRadio(settings); saveSettings(settings); audio.radioClick(); audio.setRadio(settings.radio, settings.radioVol); renderRadio(); syncTuner(); }
 radioBtn.addEventListener('click', switchRadio);
 radioVolEl.value = Math.round(settings.radioVol * 100);
-radioVolEl.addEventListener('input', () => { settings = setRadioVol(settings, radioVolEl.value / 100); saveSettings(settings); audio.setRadio(settings.radio, settings.radioVol); });
+radioVolEl.addEventListener('input', () => { settings = setRadioVol(settings, radioVolEl.value / 100); saveSettings(settings); audio.setRadio(settings.radio, settings.radioVol); tuner.setVolume(settings.radioVol); });
+document.getElementById('stprev').addEventListener('click', () => tuner.turn(-1));
+document.getElementById('stnext').addEventListener('click', () => tuner.turn(1));
 renderRadio();
 const hitRadio = (x, y) => Math.hypot(x - P.radioBtn[0], y - P.radioBtn[1]) < 16;
+const hitKnob = (x, y) => Math.hypot(x - P.radioKnob[0], y - P.radioKnob[1]) < 26;
+let wheelAcc = 0;
+canvas.addEventListener('wheel', (ev) => { // колесо над круглой ручкой — перестройка станций
+  const [x, y] = woodView.toWorld(ev.clientX, ev.clientY); if (!hitKnob(x, y)) return;
+  ev.preventDefault(); if (!settings.radio) { hint('Сначала включите радио — кнопка слева на корпусе'); return; }
+  wheelAcc += ev.deltaY; const st = Math.trunc(wheelAcc / 90); if (!st) return; wheelAcc -= st * 90; // один щелчок колеса — одна станция
+  knobAngle += st * 0.5; tuner.turn(st);
+}, { passive: false });
 window.addEventListener('pointermove', (ev) => { // на window — после обработчика поленьев, чтобы курсор не сбрасывался
   if (ev.target !== canvas) { radioHover = 0; return; }
   if (woodView.drag) { radioHover = 0; return; }
   const [x, y] = woodView.toWorld(ev.clientX, ev.clientY); radioHover = hitRadio(x, y) ? 1 : 0;
-  if (radioHover) canvas.style.cursor = 'pointer';
+  if (radioHover) canvas.style.cursor = 'pointer'; else if (hitKnob(x, y) && settings.radio) canvas.style.cursor = 'ns-resize';
 });
 canvas.addEventListener('pointerleave', () => { radioHover = 0; });
 canvas.addEventListener('pointerdown', (ev) => { const [x, y] = woodView.toWorld(ev.clientX, ev.clientY); if (hitRadio(x, y)) switchRadio(); });
@@ -580,7 +600,8 @@ const overlay = document.getElementById('overlay');
 let started = false;
 // Звук: AudioContext создаётся/возобновляется только внутри жеста пользователя
 function firstInteraction() {
-  audio.start(); if (started) return; started = true; overlay.classList.add('gone');
+  audio.start(); if (!audioUnlocked) { audioUnlocked = true; syncTuner(); }
+  if (started) return; started = true; overlay.classList.add('gone');
   // ?owl=1 — отладка: сова и крылья через 2 и 6 с после первого жеста
   if (params.has('owl')) { setTimeout(() => audio.owl?.(), 2000); setTimeout(() => audio.wings?.(1), 6000); }
 }
@@ -695,6 +716,7 @@ function frame(now) {
 
   coal.material.uniforms.uI.value = Math.min(1.3, ember * 0.9 + I * 0.5) * (0.85 + 0.15 * Math.sin(timeSec * 1.7));
   fireGlow.material.uniforms.uI.value = I * (0.1 + 0.06 * Math.max(0, I - 1)) * flick;
+  tuner.update(dt); tuner.el.muted = audio.muted;
   radioHoverT += ((radioHover ? 1 : 0) - radioHoverT) * (1 - Math.exp(-dt * 10));
   radioHalo.material.uniforms.uI.value = 0.95 * radioHoverT;
   if (settings.radio) { radioLed.material.uniforms.uColor.value.setRGB(0.25, 1.0, 0.3); radioLed.material.uniforms.uI.value = 0.9 + 0.05 * Math.sin(timeSec * 2.3); }
@@ -758,4 +780,4 @@ function frame(now) {
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);
-window.__campfire = { fire, wood, woodView, addLog, douse, audio, state: () => ({ shown, ember, fuel: fire.fuel, doused, audio: audio.ctx?.state ?? 'none', radio: settings.radio, radioVol: settings.radioVol, rain: settings.rain, rainLevel: settings.rainLevel, rainShown: rainLevelShown, speed, outAt, fadeDur }), setSpeed: (v) => { speed = v; } };
+window.__campfire = { fire, wood, woodView, addLog, douse, audio, state: () => ({ shown, ember, fuel: fire.fuel, doused, audio: audio.ctx?.state ?? 'none', radio: settings.radio, radioVol: settings.radioVol, tuner: { state: tuner.state, idx: tuner.idx, name: tuner.cur()?.name, mix: tuner.mix, bad: [...tuner.bad] }, rain: settings.rain, rainLevel: settings.rainLevel, rainShown: rainLevelShown, speed, outAt, fadeDur }), setSpeed: (v) => { speed = v; } };

@@ -1,0 +1,92 @@
+[
+ {
+  "id": "83dcfac4-b3c3-4731-afc1-a80dd271dffa",
+  "name": "Radio Armisa",
+  "url": "https://onair.armisa.it/listen/armisa/radio.mp3",
+  "tags": "anni 80,anni 90,balera,dance,folk,italiana,liscio,oldies,pop,popolare,tradizione",
+  "country": "IT",
+  "codec": "MP3",
+  "bitrate": 0
+ },
+ {
+  "id": "d1a54d2e-623e-4970-ab11-35f7b56c5ec3",
+  "name": "Classic Vinyl HD",
+  "url": "https://icecast.walmradio.com:8443/classic",
+  "tags": "1930,1940,1950,1960,beautiful music,big band,classic hits,crooners,easy listening,jazz,lounge,oldies,swing",
+  "country": "US",
+  "codec": "MP3",
+  "bitrate": 320
+ },
+ {
+  "id": "b6fa9d93-97bf-48b0-8624-e8f84b817823",
+  "name": "Anon.FM",
+  "url": "https://icecast.anon.fm/radio",
+  "tags": "anime,dnb,downtempo,experimental,jazz,psychedelic,rock,trance",
+  "country": "RU",
+  "codec": "MP3",
+  "bitrate": 192
+ },
+ {
+  "id": "962cc6df-0601-11e8-ae97-52543be04c81",
+  "name": "Dance Wave! | MP3",
+  "url": "https://dancewave.online/dance.mp3",
+  "tags": "club dance electronic house trance",
+  "country": "",
+  "codec": "MP3",
+  "bitrate": 128
+ },
+ {
+  "id": "ea8059be-d119-4de3-b27b-0d9bd6aedb17",
+  "name": "Adroit Jazz Underground",
+  "url": "https://icecast.walmradio.com:8443/jazz",
+  "tags": "bebop,big band,cool jazz,free jazz,fusion,hard bop,modern",
+  "country": "US",
+  "codec": "MP3",
+  "bitrate": 320
+ },
+ {
+  "id": "6eff3484-4ab4-4d36-bf27-9172c5aac15c",
+  "name": "Christmas Vinyl HD",
+  "url": "https://icecast.walmradio.com:8443/christmas",
+  "tags": "christmas,easy listening,holiday,vintage,vinyl",
+  "country": "US",
+  "codec": "MP3",
+  "bitrate": 320
+ },
+ {
+  "id": "313046e3-b203-4b9d-bc3e-393da7d97126",
+  "name": "WALM - Old Time Radio",
+  "url": "https://icecast.walmradio.com:8443/otr",
+  "tags": "78rpm,classic,comedy,drama,old time radio,otr,vintage",
+  "country": "US",
+  "codec": "MP3",
+  "bitrate": 64
+ },
+ {
+  "id": "64bb1467-2585-4454-a96f-34cfbc864d41",
+  "name": "WALM 2 HD",
+  "url": "https://icecast.walmradio.com:8443/walm2",
+  "tags": "choral,christian,classical music,hymns,orchestral,talk",
+  "country": "US",
+  "codec": "MP3",
+  "bitrate": 320
+ },
+ {
+  "id": "af6f51b1-0ca9-11ea-a87e-52543be04c81",
+  "name": "Intense Radio - We love Dance 256K",
+  "url": "https://secure.live-streams.nl/main",
+  "tags": "clubhouse,dance,electronic,house,melodic,techno,trance",
+  "country": "NL",
+  "codec": "MP3",
+  "bitrate": 256
+ },
+ {
+  "id": "348dfc58-ce8c-413b-b264-0384f816344b",
+  "name": "WALM HD",
+  "url": "https://icecast.walmradio.com:8443/walm",
+  "tags": "christian,christian music,contemporary christian",
+  "country": "US",
+  "codec": "MP3",
+  "bitrate": 320
+ }
+]

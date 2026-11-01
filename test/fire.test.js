@@ -115,3 +115,12 @@ test('радио: вкл/выкл и громкость сохраняются',
   st = setRadioVol(toggleRadio(st), 1.7); saveSettings(st, s);
   const r = loadSettings(s); assert.equal(r.radio, true); assert.equal(r.radioVol, 1);
 });
+
+import { nextIndex } from '../src/radio.js';
+test('тюнер: пропуск нерабочих станций и круг', () => {
+  assert.equal(nextIndex(5, 0, 1, new Set()), 1);
+  assert.equal(nextIndex(5, 0, -1, new Set()), 4);
+  assert.equal(nextIndex(5, 1, 1, new Set([2, 3])), 4);
+  assert.equal(nextIndex(3, 0, 1, new Set([0, 1, 2])), -1);
+  assert.equal(nextIndex(0, 0, 1, new Set()), -1);
+});
