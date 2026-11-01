@@ -3,7 +3,8 @@ import * as THREE from 'three';
 import { Fire, DEFAULT_LOGS, describeLog } from './fire.js';
 import { Ambience } from './audio.js';
 
-const W = 1672, H = 941;            // координаты мира = пиксели референса (y вниз)
+const W = 1672, H = 941;
+const CLIP_Y = 792; // ниже этой линии камни кольца — передние            // координаты мира = пиксели референса (y вниз)
 const RW = 480, RH = 270;           // внутреннее разрешение (пиксель-арт)
 const params = new URLSearchParams(location.search);
 const SPEED = Math.max(1, Number(params.get('speed')) || 1); // ?speed=60 — ускорить время для отладки
@@ -37,6 +38,7 @@ const common = `
   vec4 tex(sampler2D t, vec2 p){ return texture2D(t, vec2(p.x/WH.x, 1.-p.y/WH.y)); }
 `;
 const layerFrag = common + `
+  uniform float uClipY;
   uniform vec2 uLocal; // смещение локальных uv (для качающегося фонаря)
   void main(){
     vec2 p = vec2(vUv.x*WH.x, (1.-vUv.y)*WH.y) + uLocal;
@@ -48,6 +50,7 @@ const layerFrag = common + `
       ripple = sin(p.y*0.35 - uTime*1.3 + sin(p.x*0.013+uTime*0.3)*2.)*(0.6+2.5*k);
       p.x += ripple;
     }
+    if (uClipY > 0. && p.y < uClipY) discard;
     vec4 t = tex(map,p);
     if (t.a < 0.01 && uKind!=1.) discard;
     vec3 col = t.rgb * uAmb * vec3(0.72,0.78,0.98);
@@ -112,7 +115,7 @@ function layer(name, { kind = 'plain', lit = 1, amb = 1, extra = {} } = {}) {
   const mat = new THREE.ShaderMaterial({
     vertexShader: layerVert, fragmentShader: layerFrag, transparent: true, depthTest: false, depthWrite: false,
     uniforms: { ...shared, map: { value: loadTex(name) }, uRefl1: { value: null }, uRefl2: { value: null },
-      uLit: { value: lit }, uAmb: { value: amb }, uKind: { value: KIND[kind] }, uLocal: { value: new THREE.Vector2() }, ...extra },
+      uLit: { value: lit }, uAmb: { value: amb }, uKind: { value: KIND[kind] }, uLocal: { value: new THREE.Vector2() }, uClipY: { value: 0 }, ...extra },
   });
   const m = new THREE.Mesh(plane, mat); m.position.set(W / 2, H / 2, 0); m.renderOrder = order++;
   scene.add(m); return m;
@@ -193,7 +196,56 @@ for (const g of [lanternFlame, lanternGlow]) { g.position.set(P.lanternFlame[0] 
 layer('11_firering', { lit: 1.0 });
 layer('12_fire_logs', { lit: 1.0 });
 const coal = glow(300, 90, [1.0, 0.28, 0.05], { noise: 1 }); coal.position.set(P.fire[0], wy(P.fire[1] + 5), 0); scene.add(coal);
-const flames = new Particles(500, THREE.AdditiveBlending); scene.add(flames.points);
+const FIRE_W = 270, FIRE_H = 310; // размер квада пламени при полной силе (px мира)
+const flameMat = new THREE.ShaderMaterial({ vertexShader: layerVert, transparent: true, depthTest: false, depthWrite: false,
+  uniforms: { uTime: shared.uTime, uI: { value: 0 }, uSeed: { value: new THREE.Vector3(Math.random() * 9, Math.random() * 9, Math.random() * 9) } },
+  fragmentShader: `uniform float uTime,uI; uniform vec3 uSeed; varying vec2 vUv;
+  float hash(vec2 p){ return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453); }
+  float noise(vec2 p){ vec2 i=floor(p),f=fract(p); f=f*f*(3.-2.*f);
+    return mix(mix(hash(i),hash(i+vec2(1,0)),f.x),mix(hash(i+vec2(0,1)),hash(i+vec2(1,1)),f.x),f.y); }
+  float fbm(vec2 p){ float v=0.,a=.5; for(int i=0;i<4;i++){ v+=a*noise(p); p=p*2.03+1.7; a*=.5; } return v; }
+  // один язык пламени: капля, сужающаяся кверху, с изгибом от шума
+  float tongue(vec2 q, float cx, float h, float w, float n){
+    float y = q.y / h; if (y > 1.05) return 0.;
+    float bend = (n - .5) * .55 * y + sin(uTime*2.3 + cx*9.)*.04*y;
+    float width = w * pow(max(0., 1. - y), .9) * (0.55 + .45*smoothstep(0., .22, y + .02));
+    float d = abs(q.x - cx - bend) / max(width, 1e-3);
+    return clamp(1. - d, 0., 1.) * (1. - y*.55);
+  }
+  void main(){
+    vec2 q = vec2(vUv.x*2.-1., vUv.y);
+    float t = uTime;
+    float n = fbm(vec2(q.x*2.6, q.y*3.2 - t*2.6) + uSeed.xy);
+    float n2 = fbm(vec2(q.x*5., q.y*6. - t*4.1) + uSeed.yz);
+    float I = clamp(uI, 0., 1.);
+    // три языка мерцают независимо; на слабом огне — низкие и узкие
+    float f1 = .75 + .25*sin(t*3.1 + uSeed.x) + .18*(noise(vec2(t*1.7, 1.)) - .5);
+    float f2 = .8 + .2*sin(t*2.3 + uSeed.y*2.) + .2*(noise(vec2(t*2.1, 5.)) - .5);
+    float f3 = .75 + .25*sin(t*3.7 + uSeed.z) + .18*(noise(vec2(t*1.9, 9.)) - .5);
+    float hs = mix(.28, 1., I);
+    float heat = 0.;
+    heat = max(heat, tongue(q, -.28, .6*hs*f1, .28, n));
+    heat = max(heat, tongue(q,  .02, .95*hs*f2, .4, n));
+    heat = max(heat, tongue(q,  .3, .55*hs*f3, .26, n));
+    // низовой слой огня над углями
+    heat = max(heat, clamp(1. - abs(q.x)*1.7, 0., 1.) * smoothstep(.12*hs, 0., q.y) * .62);
+    heat = heat + (n2 - .5) * .45 * heat - q.y * .08;
+    heat *= .75 + .35*I;
+    // палитра: тёмный край, красный, оранжевый, жёлтый, бело-жёлтое ядро
+    vec3 c; float a = 1.;
+    if (heat > .78) c = vec3(1., .96, .78);
+    else if (heat > .6) c = vec3(1., .82, .32);
+    else if (heat > .42) c = vec3(.98, .52, .12);
+    else if (heat > .26) c = vec3(.82, .24, .06);
+    else if (heat > .14) { c = vec3(.42, .09, .04); a = .75; }
+    else discard;
+    gl_FragColor = vec4(c, a);
+  }` });
+const flameGeo = new THREE.PlaneGeometry(1, 1); flameGeo.translate(0, 0.5, 0);
+const flame = new THREE.Mesh(flameGeo, flameMat); flame.renderOrder = order++;
+const FLAME_BASE_Y = P.fire[1] + 18; flame.position.set(P.fire[0], wy(FLAME_BASE_Y), 0); scene.add(flame);
+// передние камни кольца рисуем повторно поверх пламени
+const ringFront = layer('11_firering', { lit: 1.0, extra: { uClipY: { value: CLIP_Y } } });
 const sparks = new Particles(150, THREE.AdditiveBlending); scene.add(sparks.points);
 layer('13_woodpile', { lit: 1.3 });
 layer('14_stump_axe', { lit: 1.2 });
@@ -215,7 +267,9 @@ const postScene = new THREE.Scene(); postScene.add(post); const postCam = new TH
 // ---------- состояние и логика костра ----------
 const t0 = performance.now(), clock0 = Date.now();
 const vnow = () => clock0 + (performance.now() - t0) * SPEED;
-const fire = SPEED === 1 ? Fire.load(localStorage, vnow()) : new Fire({ now: vnow() });
+const fuelParam = params.get('fuel'); // ?fuel=60: стартовый запас в секундах (отладка)
+const fire = fuelParam !== null ? new Fire({ fuel: Number(fuelParam), now: vnow() })
+  : SPEED === 1 ? Fire.load(localStorage, vnow()) : new Fire({ now: vnow() });
 let shown = 0, ember = 0, lastFuelPositive = fire.fuel > 0;
 const audio = new Ambience();
 let sel = 1;
@@ -230,7 +284,7 @@ function renderPicker() {
   const mins = Math.ceil(fire.fuel / 60);
   info.textContent = `${describeLog(DEFAULT_LOGS[sel])} · ${fire.isOut ? (ember > 0.02 ? 'тлеют угли' : 'костёр погас') : `огня хватит на ~${mins} мин`} · ←/→ выбор, OK — подбросить`;
 }
-function addLog() { fire.addLog(DEFAULT_LOGS[sel].id, vnow()); if (SPEED === 1) fire.save(); renderPicker(); burst = 1; }
+function addLog() { fire.addLog(DEFAULT_LOGS[sel].id, vnow()); if (SPEED === 1 && fuelParam === null) fire.save(); renderPicker(); burst = 1; }
 let burst = 0;
 
 // ---------- интерфейс: ТВ-режим ----------
@@ -303,22 +357,16 @@ function frame(now) {
 
   // пламя
   const [fx, fy] = P.fire;
-  const rate = I * 260 + burst * 200; burst = Math.max(0, burst - dt);
-  for (let k = 0; k < rate * dt; k++) {
-    const sx = rand(-1, 1) * (40 + 80 * I);
-    flames.spawn({ x: fx + sx, y: fy + rand(-8, 8), vx: -sx * 0.6, vy: -(70 + 160 * I) * rand(0.7, 1.2), life: rand(0.4, 0.95) * (0.6 + 0.6 * I), s: rand(18, 30) * (0.7 + 0.6 * I) });
-  }
-  flames.update(dt, (p, dt, k) => {
-    p.x += p.vx * dt + Math.sin(timeSec * 6 + p.y * 0.05) * 12 * dt; p.y += p.vy * dt; p.vx *= 1 - dt * 2;
-    const c = k < 0.3 ? [1, 0.92 - k, 0.55 - k * 1.5] : k < 0.7 ? [1, 0.55 - (k - 0.3) * 0.6, 0.1] : [0.75, 0.18, 0.04];
-    return { r: c[0], g: c[1], b: c[2], size: p.s * (1 - k * 0.75), a: (1 - k) * 0.9 };
-  });
-  for (let k = 0; k < (2 + 22 * I + burst * 30) * dt; k++) if (I > 0.03 || Math.random() < 0.02)
-    sparks.spawn({ x: fx + rand(-50, 50), y: fy - 10, vx: rand(-30, 30), vy: -rand(120, 300) * (0.5 + I), life: rand(1, 2.8), ph: rand(0, 6) });
+  burst = Math.max(0, burst - dt);
+  const fI = Math.min(1, I + burst * 0.15);
+  flame.visible = fI > 0.02;
+  flame.scale.set(FIRE_W * (0.45 + 0.55 * fI), FIRE_H * (0.3 + 0.7 * fI), 1);
+  flameMat.uniforms.uI.value = fI;
+  for (let k = 0; k < (0.6 + 5 * I + burst * 8) * dt; k++) if (I > 0.03 || Math.random() < 0.02)
+    sparks.spawn({ x: fx + rand(-40, 40), y: fy - 60 - 120 * I, vx: rand(-30, 30), vy: -rand(120, 300) * (0.5 + I), life: rand(1, 2.8), ph: rand(0, 6) });
   sparks.update(dt, (p, dt, k) => {
     p.x += (p.vx + Math.sin(timeSec * 3 + p.ph) * 40) * dt; p.y += p.vy * dt; p.vy *= 1 - dt * 0.8;
-    const tw = Math.sin(timeSec * 20 + p.ph) > -0.3 ? 1 : 0.3;
-    return { r: 1, g: 0.65, b: 0.25, size: 5, a: (1 - k) * tw };
+    return { r: 1, g: 0.7 - k * 0.3, b: 0.3 - k * 0.2, size: 4 - k * 1.5, a: Math.pow(1 - k, 1.5) * 0.85 };
   });
   // дым
   const smokeAmt = 2 + I * 6 + (fire.isOut ? ember * 8 : 0);
@@ -346,7 +394,7 @@ function frame(now) {
     return { r: 0.03, g: 0.03, b: 0.06, size: 22, a: 1, shape: 1 + Math.min(0.99, f * 0.98) };
   });
 
-  if (now > saveAt) { saveAt = now + 10000; if (SPEED === 1) fire.save(); renderPicker(); }
+  if (now > saveAt) { saveAt = now + 10000; if (SPEED === 1 && fuelParam === null) fire.save(); renderPicker(); }
 
   renderer.setRenderTarget(rt); renderer.render(scene, cam);
   renderer.setRenderTarget(null); renderer.render(postScene, postCam);
