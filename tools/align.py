@@ -5,7 +5,7 @@ RAW='/workspace/campfire_layers/raw/layers_from_campfire/'
 OUT='/workspace/campfire/public/layers/'; AL='/workspace/campfire_layers/aligned/'
 MAP={'6E620ABD-852C-4D65-B277-D0716CABF299 2':'01_sky','9E270D44-9865-4EDC-80F0-3E846388AE5D':'02_moon',
 '613E568A-EB5F-4D57-95B0-6E1D1EB03DF1':'03_clouds','DA8F3FCF-AB52-46DF-8FC4-8F150509EA00':'04_mountains',
-'E236A01B-566F-4913-ABF4-55E12748EA68':'05_far_shore','C944D288-9832-456C-A0E0-45FA01B8E8DE':'06_lake',
+'../05_far_shore_v2':'05_far_shore','C944D288-9832-456C-A0E0-45FA01B8E8DE':'06_lake',
 'E0E53216-D01C-4B8E-8283-D50BBB242A2F':'07_forest_mid','3EF738D4-747F-4F6F-BFB3-9EA2DF0C8F04':'08_ground',
 'AAC54997-F4ED-4D59-AD8D-B8D4280DD7BF':'09_tree','6551349D-AE65-4148-A6FF-009C5455ACC2':'10_lantern',
 '554B83D3-5BEC-42E6-9EB3-8B0BE8F836F7':'11_firering','4FB2EB89-9DE1-46B3-B3AA-6E926BEE84D8':'12_fire_logs',
@@ -24,7 +24,7 @@ def feat(rgb):  # контуры устойчивее к тёплой подсв
 refs=cv2.resize(ref,(int(W*S),int(H*S)),interpolation=cv2.INTER_AREA); rf=feat(refs)
 report={}
 for uid,name in MAP.items():
-    src=RAW+uid+'.PNG'; shutil.copy(src,OUT+name+'.png')
+    src=RAW+uid+('.png' if uid.startswith('..') else '.PNG'); shutil.copy(src,OUT+name+'.png')
     im=np.array(Image.open(src).convert('RGBA').resize((W,H),Image.LANCZOS))
     if name=='01_sky':
         Image.fromarray(im).save(AL+name+'.png'); report[name]=dict(scale=1,dx=0,dy=0,score=None); continue
