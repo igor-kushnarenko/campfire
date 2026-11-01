@@ -1,6 +1,6 @@
 // Тюнер: интернет-станции через <audio>, переходы через эфирные помехи.
 // Станция «выплывает» из шума и «тонет» в нём; нерабочие пропускаются; без сети — только шум.
-export const TUNE = { fadeOut: 0.7, fadeIn: 2.2, timeout: 9, idleNoise: 1, stationNoise: 0.12 };
+export const TUNE = { fadeOut: 0.7, fadeIn: 2.2, timeout: 9, boost: 2.6, idleNoise: 1, stationNoise: 0.12 };
 
 /** Чистая логика выбора следующей станции с пропуском нерабочих. */
 export function nextIndex(n, from, dir, bad) {
@@ -13,13 +13,23 @@ export class Tuner {
   constructor({ audio, onName }) {
     this.audio = audio; this.onName = onName || (() => {});
     this.list = []; this.idx = -1; this.bad = new Set();
-    this.el = new Audio(); this.el.preload = 'none'; this.el.volume = 0;
+    // два плеера: «cors» идёт через WebAudio (можно усилить громче 100% и сжать компрессором),
+    // «plain» — запасной для станций без CORS, его громкость ограничена 100%
+    this.cors = new Audio(); this.cors.crossOrigin = 'anonymous'; this.plain = new Audio();
+    for (const e of [this.cors, this.plain]) { e.preload = 'none'; e.volume = 0; }
+    this.el = this.cors; this.boost = null;
     this.mix = 0;            // 0 — только шум, 1 — станция
     this.target = 0; this.state = 'off'; // off | out | loading | in | on | dead
     this.t = 0; this.pending = 0; this.pendT = 0; this.vol = 0.6; this.on = false;
-    this.el.addEventListener('playing', () => { if (this.state === 'loading') { this.state = 'in'; this.onName(this.cur()?.name); } });
-    const fail = () => { if (this.state === 'loading' || this.state === 'in' || this.state === 'on') this.skip(); };
-    this.el.addEventListener('error', fail); this.el.addEventListener('ended', fail);
+    for (const e of [this.cors, this.plain]) {
+      e.addEventListener('playing', () => { if (e === this.el && this.state === 'loading') { this.state = 'in'; this.onName(this.cur()?.name); } });
+      const fail = () => {
+        if (e !== this.el || !['loading', 'in', 'on'].includes(this.state)) return;
+        if (e === this.cors && this.state === 'loading') { this.stop(); this.el = this.plain; this.play(); return; } // нет CORS — пробуем напрямую
+        this.skip();
+      };
+      e.addEventListener('error', fail); e.addEventListener('ended', fail);
+    }
     window.addEventListener('online', () => { if (this.on && this.state === 'dead') { this.bad.clear(); this.go(this.idx < 0 ? 0 : this.idx); } });
   }
   async load(url = './stations.json') {
@@ -42,8 +52,15 @@ export class Tuner {
   go(i) {
     if (!navigator.onLine || i < 0) { this.state = 'dead'; this.stop(); this.onName(null); return; }
     this.idx = i; const s = this.cur();
-    this.state = 'loading'; this.t = 0;
-    this.el.src = s.url; this.el.play().catch(() => {}); // ошибки ловит 'error' или таймаут
+    this.state = 'loading'; this.t = 0; this.el = this.cors; this.play();
+  }
+  play() {
+    if (this.el === this.cors && !this.boost && this.audio.ctx) { // подключаем к WebAudio один раз
+      try { const c = this.audio.ctx, src = c.createMediaElementSource(this.cors); const g = c.createGain(); g.gain.value = 0;
+        const comp = c.createDynamicsCompressor(); comp.threshold.value = -18; comp.ratio.value = 3; comp.attack.value = 0.01; comp.release.value = 0.3;
+        src.connect(g).connect(comp).connect(this.audio.master); this.boost = g; } catch { this.el = this.plain; }
+    }
+    this.el.src = this.cur().url; this.el.play().catch(() => {}); // ошибки ловит 'error' или таймаут
   }
   skip() {
     this.bad.add(this.idx); this.stop();
@@ -51,7 +68,7 @@ export class Tuner {
     if (i < 0) { this.state = 'dead'; this.onName(null); return; }
     this.go(i);
   }
-  stop() { try { this.el.pause(); this.el.removeAttribute('src'); this.el.load(); } catch {} }
+  stop() { for (const e of [this.cors, this.plain]) { try { e.pause(); e.removeAttribute('src'); e.load(); } catch {} } }
   update(dt) {
     const s = this.state;
     if (s === 'out') { // станция тонет в помехах, ждём конца прокрутки
@@ -71,7 +88,9 @@ export class Tuner {
     }
     // кривая: станция нарастает плавно, шум уходит быстрее, но не до нуля — как у настоящего приёмника
     const m = this.mix * this.mix * (3 - 2 * this.mix);
-    this.el.volume = this.on ? Math.min(1, this.vol * m) : 0;
+    const v = this.on ? this.vol * m : 0;
+    if (this.el === this.cors && this.boost) { this.cors.volume = 1; this.plain.volume = 0; this.boost.gain.setTargetAtTime(v * TUNE.boost, this.audio.ctx.currentTime, 0.05); }
+    else { this.plain.volume = Math.min(1, v * 1.6); this.cors.volume = 0; if (this.boost) this.boost.gain.value = 0; }
     this.audio.setRadioNoise?.(this.on ? TUNE.stationNoise + (TUNE.idleNoise - TUNE.stationNoise) * (1 - Math.sqrt(m)) : 0);
   }
 }

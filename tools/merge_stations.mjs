@@ -8,7 +8,8 @@ const seen = new Map(db.map((s) => [key(s), s])), urls = new Set(db.map((s) => s
 let added = 0;
 for (const f of process.argv.slice(2)) {
   for (const r of JSON.parse(fs.readFileSync(f, 'utf8'))) {
-    const url = (r.url_resolved || r.url || '').trim();
+    // сайт на https: http-потоки браузер заблокирует, пробуем тот же адрес по https (не заиграет — тюнер пропустит)
+    const url = (r.url_resolved || r.url || '').trim().replace(/^http:\/\//, 'https://');
     if (!/^https:\/\//.test(url) || r.hls) continue; // сайт на https — только https, без HLS
     const s = { id: r.stationuuid || url, name: (r.name || '').trim(), url, tags: r.tags || '', country: r.countrycode || '', codec: r.codec || '', bitrate: r.bitrate || 0 };
     if (seen.has(key(s)) || urls.has(url)) continue;

@@ -620,9 +620,24 @@ fsBtn.addEventListener('click', toggleFs);
 // любой жест (клик, тап, клавиша пульта) включает звук; дрова по клику на сцену НЕ добавляются
 for (const ev of ['pointerdown', 'touchend', 'click']) window.addEventListener(ev, () => { firstInteraction(); wake(); }, { capture: true });
 window.addEventListener('pointermove', wake);
-const focusables = () => [...document.querySelectorAll('#hud button, #hud input')].filter((el) => el.offsetParent !== null && !el.disabled && !el.closest('.collapsed'));
+// меню прячется в круглую кнопку: раскрывается при наведении/нажатии/пульте, сворачивается через 5 с после ухода мыши
+const hud = document.getElementById('hud'), menuBtn = document.getElementById('menubtn');
+let menuTimer = 0, overMenu = false;
+function openMenu() { clearTimeout(menuTimer); hud.classList.remove('closed'); menuBtn.setAttribute('aria-expanded', 'true'); }
+function scheduleClose(ms = 5000) { clearTimeout(menuTimer); menuTimer = setTimeout(() => { if (overMenu) return; hud.classList.add('closed'); menuBtn.setAttribute('aria-expanded', 'false'); if (hud.contains(document.activeElement)) document.activeElement.blur(); }, ms); }
+for (const el of [hud, menuBtn]) {
+  el.addEventListener('pointerenter', (e) => { if (e.pointerType === 'mouse') { overMenu = true; openMenu(); } });
+  el.addEventListener('pointerleave', (e) => { if (e.pointerType === 'mouse') { overMenu = false; scheduleClose(); } });
+}
+menuBtn.addEventListener('click', () => { openMenu(); if (!overMenu) scheduleClose(); });
+hud.addEventListener('pointerdown', () => { if (!overMenu) scheduleClose(); }); // касание на телефоне продлевает
+const focusables = () => [...document.querySelectorAll('#hud button, #hud input')].filter((el) => el.offsetParent !== null && !el.disabled && !el.closest('.collapsed') && !el.closest('.closed'));
 window.addEventListener('keydown', (e) => {
   firstInteraction(); wake();
+  if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Enter', ' '].includes(e.key)) { // пульт: открыть меню, закрыть через 5 с тишины
+    const wasClosed = hud.classList.contains('closed'); openMenu(); if (!overMenu) scheduleClose();
+    if (wasClosed) { document.getElementById('add').focus(); e.preventDefault(); return; }
+  }
   const list = focusables(), i = list.indexOf(document.activeElement);
   const k = e.key;
   const onRange = document.activeElement?.type === 'range';
@@ -716,7 +731,7 @@ function frame(now) {
 
   coal.material.uniforms.uI.value = Math.min(1.3, ember * 0.9 + I * 0.5) * (0.85 + 0.15 * Math.sin(timeSec * 1.7));
   fireGlow.material.uniforms.uI.value = I * (0.1 + 0.06 * Math.max(0, I - 1)) * flick;
-  tuner.update(dt); tuner.el.muted = audio.muted;
+  tuner.update(dt); tuner.plain.muted = audio.muted;
   radioHoverT += ((radioHover ? 1 : 0) - radioHoverT) * (1 - Math.exp(-dt * 10));
   radioHalo.material.uniforms.uI.value = 0.95 * radioHoverT;
   if (settings.radio) { radioLed.material.uniforms.uColor.value.setRGB(0.25, 1.0, 0.3); radioLed.material.uniforms.uI.value = 0.9 + 0.05 * Math.sin(timeSec * 2.3); }
@@ -780,4 +795,4 @@ function frame(now) {
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);
-window.__campfire = { fire, wood, woodView, addLog, douse, audio, state: () => ({ shown, ember, fuel: fire.fuel, doused, audio: audio.ctx?.state ?? 'none', radio: settings.radio, radioVol: settings.radioVol, tuner: { state: tuner.state, idx: tuner.idx, name: tuner.cur()?.name, mix: tuner.mix, bad: [...tuner.bad] }, rain: settings.rain, rainLevel: settings.rainLevel, rainShown: rainLevelShown, speed, outAt, fadeDur }), setSpeed: (v) => { speed = v; } };
+window.__campfire = { tuner, fire, wood, woodView, addLog, douse, audio, state: () => ({ shown, ember, fuel: fire.fuel, doused, audio: audio.ctx?.state ?? 'none', radio: settings.radio, radioVol: settings.radioVol, tuner: { state: tuner.state, idx: tuner.idx, name: tuner.cur()?.name, mix: tuner.mix, bad: [...tuner.bad] }, rain: settings.rain, rainLevel: settings.rainLevel, rainShown: rainLevelShown, speed, outAt, fadeDur }), setSpeed: (v) => { speed = v; } };

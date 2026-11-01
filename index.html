@@ -9,9 +9,10 @@
 </head>
 <body>
 <canvas id="c"></canvas>
-<div id="overlay"><div class="hint">Нажмите любую кнопку или коснитесь экрана — включится звук.<br><small>Перетащите полено из поленницы в костёр · топор у пня колет новые дрова · меню — в правом нижнем углу</small></div></div>
+<div id="overlay"><div class="hint">Нажмите любую кнопку или коснитесь экрана — включится звук.<br><small>Перетащите полено из поленницы в костёр · топор у пня колет новые дрова · меню — круглая кнопка в правом нижнем углу</small></div></div>
 <div id="toast" class="glass"></div>
-<div id="hud" class="glass">
+<button id="menubtn" type="button" class="glass" aria-label="Меню" aria-expanded="false"><svg viewBox="0 0 16 16"><path d="M3 4.5h10M3 8h10M3 11.5h10" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></button>
+<div id="hud" class="glass closed">
   <div class="row">
   </div>
   <div class="row">
