@@ -50,7 +50,7 @@ const common = `
   vec4 tex(sampler2D t, vec2 p){ return texture2D(t, vec2(p.x/WH.x, 1.-p.y/WH.y)); }
 `;
 const layerFrag = common + `
-  uniform float uClipY, uRim;
+  uniform float uClipY, uRim, uUseMask; uniform sampler2D uMask;
   uniform vec2 uLocal; // смещение локальных uv (для качающегося фонаря)
   void main(){
     vec2 p = vec2(vUv.x*WH.x, (1.-vUv.y)*WH.y) + uLocal;
@@ -64,6 +64,7 @@ const layerFrag = common + `
       p.x += ripple;
     }
     if (uClipY > 0. && p.y < uClipY) discard;
+    if (uUseMask > .5 && tex(uMask,p).r < .5) discard;
     vec4 t = tex(map,p);
     if (t.a < 0.01 && uKind!=1.) discard;
     vec3 col = t.rgb * uAmb * vec3(0.72,0.78,0.98);
@@ -142,7 +143,7 @@ function layer(name, { kind = 'plain', lit = 1, amb = 1, extra = {} } = {}) {
   const mat = new THREE.ShaderMaterial({
     vertexShader: layerVert, fragmentShader: layerFrag, transparent: true, depthTest: false, depthWrite: false,
     uniforms: { ...shared, map: { value: loadTex(name) }, uRefl1: { value: null }, uRefl2: { value: null },
-      uLit: { value: lit }, uAmb: { value: amb }, uKind: { value: KIND[kind] }, uLocal: { value: new THREE.Vector2() }, uClipY: { value: 0 }, uRim: { value: 0 }, ...extra },
+      uLit: { value: lit }, uAmb: { value: amb }, uKind: { value: KIND[kind] }, uLocal: { value: new THREE.Vector2() }, uClipY: { value: 0 }, uRim: { value: 0 }, uUseMask: { value: 0 }, uMask: { value: null }, ...extra },
   });
   const m = new THREE.Mesh(plane, mat); m.position.set(W / 2, H / 2, 0); m.renderOrder = order++;
   scene.add(m); return m;
@@ -439,7 +440,7 @@ const flames = FLAME_LAYERS.map((L) => {
   return { m, L };
 });
 // передние камни кольца рисуем повторно поверх пламени
-const ringFront = layer('11_firering', { lit: 1.0, extra: { uClipY: { value: CLIP_Y }, uRim: { value: 1 } } });
+const ringFront = layer('11_firering', { lit: 1.0, extra: { uUseMask: { value: 1 }, uMask: { value: loadTex('11_firering_front') }, uRim: { value: 1 } } }); // маска по силуэту передних и боковых камней
 const ORD_ZONE = order++;
 const sparks = new Particles(150, THREE.AdditiveBlending); scene.add(sparks.points);
 // статичная поленница заменена отдельными поленьями (см. woodview.js)
