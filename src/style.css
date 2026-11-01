@@ -1,0 +1,18 @@
+html,body{margin:0;height:100%;background:#000;overflow:hidden;user-select:none;-webkit-tap-highlight-color:transparent}
+body.idle{cursor:none}
+#c{position:absolute;image-rendering:pixelated;image-rendering:crisp-edges}
+#overlay,#hud{position:absolute;font-family:"Courier New",monospace;font-weight:bold;color:#f3d9a4;letter-spacing:.08em;text-shadow:2px 2px 0 #000}
+#overlay{left:0;right:0;top:0;bottom:0;display:flex;align-items:center;justify-content:center;transition:opacity 1.5s}
+#overlay .box{background:#0009;border:3px solid #f3d9a466;padding:.6em 1.2em;font-size:clamp(14px,2vw,36px);animation:pulse 3s ease-in-out infinite;text-align:center}
+@keyframes pulse{50%{opacity:.5}}
+#overlay.gone{opacity:0;pointer-events:none}
+#hud{left:0;right:0;bottom:4%;display:flex;flex-direction:column;align-items:center;gap:.6em;transition:opacity 1.2s}
+body.idle #hud{opacity:0;pointer-events:none}
+#picker{background:#120a06cc;border:3px solid #8a5a2c;padding:.5em .8em;font-size:clamp(12px,1.5vw,28px);text-align:center}
+#picker .row{display:flex;gap:.6em}
+#picker .item{padding:.25em .5em;border:3px solid transparent;opacity:.6;cursor:pointer}
+#picker .item.sel{border-color:#f3a64a;opacity:1;background:#3a1c0a}
+#picker .info{margin-top:.3em;font-size:.7em;opacity:.8}
+.buttons{display:flex;gap:.6em}
+button{font:inherit;font-size:clamp(11px,1.2vw,22px);color:#f3d9a4;background:#120a06cc;border:3px solid #8a5a2c;padding:.3em .8em;cursor:pointer}
+button:focus-visible{outline:3px solid #f3a64a}
