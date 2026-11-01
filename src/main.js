@@ -5,8 +5,13 @@ import { Ambience } from './audio.js';
 
 const W = 1672, H = 941;
 const CLIP_Y = 792; // ниже этой линии камни кольца — передние            // координаты мира = пиксели референса (y вниз)
-const RW = 480, RH = 270;           // внутреннее разрешение (пиксель-арт)
 const params = new URLSearchParams(location.search);
+// ?q=low — старый путь для слабых ТВ: всё рисуется в 480x270 и растягивается ближайшим соседом.
+// По умолчанию сцена рисуется в разрешении экрана (с учётом devicePixelRatio, не больше 1920x1080),
+// а «пиксельность» эффектов задаётся в шейдерах сеткой PIX пикселей мира.
+const LOW = params.get('q') === 'low';
+let RW = 480, RH = 270;
+const PIX = W / 480; // размер «пикселя» эффектов в координатах мира (~3.5 px)
 const SPEED = Math.max(1, Number(params.get('speed')) || 1); // ?speed=60 — ускорить время для отладки
 
 // Ключевые точки сцены (по выровненным слоям)
@@ -18,7 +23,7 @@ const P = {
 const canvas = document.getElementById('c');
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: false, powerPreference: 'high-performance' });
 renderer.setPixelRatio(1);
-const rt = new THREE.WebGLRenderTarget(RW, RH, { minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter });
+const rt = new THREE.WebGLRenderTarget(RW, RH, { minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter, generateMipmaps: false });
 const scene = new THREE.Scene();
 const cam = new THREE.OrthographicCamera(0, W, H, 0, -10, 10); // y вверх; переводим через wy()
 const wy = (y) => H - y;
@@ -45,9 +50,10 @@ const layerFrag = common + `
     vec2 sp = p; // экранная позиция (для света)
     if (uKind==2.) { sp = p; p.x = mod(p.x - uCloudOff.x, WH.x); }
     float ripple = 0.;
+    vec2 sq = (floor(sp/3.4833)+.5)*3.4833; // пиксельная сетка для эффектов воды
     if (uKind==3.) {
       float k = clamp((p.y-${P.horizon}.)/400.,0.,1.);
-      ripple = sin(p.y*0.35 - uTime*1.3 + sin(p.x*0.013+uTime*0.3)*2.)*(0.6+2.5*k);
+      ripple = floor(sin(sq.y*0.35 - uTime*1.3 + sin(sq.x*0.013+uTime*0.3)*2.)*(0.6+2.5*k)/3.4833+.5)*3.4833;
       p.x += ripple;
     }
     if (uClipY > 0. && p.y < uClipY) discard;
@@ -81,11 +87,11 @@ const layerFrag = common + `
       float ra = max(r1.a,r2.a);
       col = mix(col, refl*0.55, ra*0.32*(1.-k));
       float w = 14. + (p.y-${P.horizon}.)*0.32;
-      float dx = abs(sp.x + ripple*3. - uMoon.x);
+      float dx = abs(sq.x + ripple*3. - uMoon.x);
       float band = smoothstep(w, w*0.25, dx);
-      float glint = step(0.55, noise(vec2(sp.x*0.08, sp.y*0.45 - uTime*0.7))) * (0.6+0.4*sin(uTime*3.+sp.y));
+      float glint = step(0.55, noise(vec2(sq.x*0.08, sq.y*0.45 - uTime*0.7))) * (0.6+0.4*sin(uTime*3.+sq.y));
       col += vec3(0.85,0.85,0.7)*band*(0.18 + 0.75*glint)*(1.-0.6*k);
-      col *= 1. + 0.07*sin(sp.y*0.9 - uTime*1.8 + noise(sp*0.02)*6.);
+      col *= 1. + 0.07*sin(sq.y*0.9 - uTime*1.8 + noise(sq*0.02)*6.);
     }
     // тёплый свет костра и фонаря (аддитивная маска с мерцанием)
     vec2 fd = (sp-uFirePos)*vec2(1.,1.45);
@@ -99,9 +105,10 @@ const layerFrag = common + `
 
 const loader = new THREE.TextureLoader();
 function loadTex(name) {
-  const t = loader.load(`./layers/half/${name}.png`);
-  t.colorSpace = THREE.NoColorSpace; t.generateMipmaps = true;
-  t.minFilter = THREE.LinearMipmapLinearFilter; t.magFilter = THREE.LinearFilter;
+  const t = loader.load(LOW ? `./layers/half/${name}.png` : `./layers/aligned/${name}.png`);
+  // без мип-карт: при выводе ~1:1 они только мылят картинку
+  t.colorSpace = THREE.NoColorSpace; t.generateMipmaps = false;
+  t.minFilter = THREE.LinearFilter; t.magFilter = THREE.LinearFilter;
   return t;
 }
 const shared = {
@@ -135,16 +142,18 @@ function glow(w, h, color, { noise = 0 } = {}) {
 }
 
 // ---------- частицы ----------
-const ptVert = `attribute float aSize,aAlpha,aShape; attribute vec3 aColor; varying vec3 vC; varying float vA,vS;
+const ptVert = `uniform float uPx; attribute float aSize,aAlpha,aShape; attribute vec3 aColor; varying vec3 vC; varying float vA,vS;
   void main(){ vC=aColor; vA=aAlpha; vS=aShape; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.);
-    gl_PointSize=max(1.,aSize*${(RW / W).toFixed(5)}); }`;
-const ptFrag = `varying vec3 vC; varying float vA,vS;
+    gl_PointSize=max(1.,floor(aSize*uPx/${PIX.toFixed(4)}+.5)*${PIX.toFixed(4)}*uPx); }`;
+const ptFrag = `uniform float uCells; varying vec3 vC; varying float vA,vS;
   void main(){ vec2 c=gl_PointCoord*2.-1.; float a;
-    if(vS<0.5){ a=1.-smoothstep(.2,1.,length(c)); }
+    if(vS<0.5){ // мягкая точка, но квантованная по пиксельной сетке
+      vec2 g=(floor(gl_PointCoord*uCells)+.5)/uCells*2.-1.; a=1.-smoothstep(.2,1.,length(g)); }
     else { float f=fract(vS)*2.-1.; float y=-c.y; // летучая мышь: тельце + крылья, взмах f
       float wing=abs(y-(abs(c.x)*f*0.9))<0.22&&abs(c.x)<0.95?1.:0.; float body=length(c*vec2(2.5,1.6))<0.5?1.:0.;
       a=max(wing,body); }
     if(a<0.05) discard; gl_FragColor=vec4(vC,a*vA); }`;
+const pxScale = { value: RW / W }; // пикселей буфера на пиксель мира
 class Particles {
   constructor(max, blending) {
     this.max = max; this.n = 0; this.list = [];
@@ -155,7 +164,7 @@ class Particles {
     g.setAttribute('aSize', new THREE.BufferAttribute(this.size, 1)); g.setAttribute('aAlpha', new THREE.BufferAttribute(this.alpha, 1));
     g.setAttribute('aShape', new THREE.BufferAttribute(this.shape, 1));
     this.points = new THREE.Points(g, new THREE.ShaderMaterial({ vertexShader: ptVert, fragmentShader: ptFrag, transparent: true,
-      blending, depthTest: false, depthWrite: false }));
+      blending, depthTest: false, depthWrite: false, uniforms: { uPx: pxScale, uCells: { value: 4 } } }));
     this.points.frustumCulled = false; this.points.renderOrder = order++;
   }
   spawn(p) { if (this.list.length < this.max) this.list.push({ age: 0, ...p }); }
@@ -198,8 +207,8 @@ layer('12_fire_logs', { lit: 1.0 });
 const coal = glow(300, 90, [1.0, 0.28, 0.05], { noise: 1 }); coal.position.set(P.fire[0], wy(P.fire[1] + 5), 0); scene.add(coal);
 const FIRE_W = 270, FIRE_H = 310; // размер квада пламени при полной силе (px мира)
 const flameMat = new THREE.ShaderMaterial({ vertexShader: layerVert, transparent: true, depthTest: false, depthWrite: false,
-  uniforms: { uTime: shared.uTime, uI: { value: 0 }, uSeed: { value: new THREE.Vector3(Math.random() * 9, Math.random() * 9, Math.random() * 9) } },
-  fragmentShader: `uniform float uTime,uI; uniform vec3 uSeed; varying vec2 vUv;
+  uniforms: { uTime: shared.uTime, uI: { value: 0 }, uSize: { value: new THREE.Vector2(1, 1) }, uSeed: { value: new THREE.Vector3(Math.random() * 9, Math.random() * 9, Math.random() * 9) } },
+  fragmentShader: `uniform float uTime,uI; uniform vec2 uSize; uniform vec3 uSeed; varying vec2 vUv;
   float hash(vec2 p){ return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453); }
   float noise(vec2 p){ vec2 i=floor(p),f=fract(p); f=f*f*(3.-2.*f);
     return mix(mix(hash(i),hash(i+vec2(1,0)),f.x),mix(hash(i+vec2(0,1)),hash(i+vec2(1,1)),f.x),f.y); }
@@ -213,8 +222,10 @@ const flameMat = new THREE.ShaderMaterial({ vertexShader: layerVert, transparent
     return clamp(1. - d, 0., 1.) * (1. - y*.55);
   }
   void main(){
-    vec2 q = vec2(vUv.x*2.-1., vUv.y);
-    float t = uTime;
+    vec2 cells = uSize / ${PIX.toFixed(4)}; // пиксельная сетка ~3.5 px мира
+    vec2 suv = (floor(vUv*cells)+.5)/cells;
+    vec2 q = vec2(suv.x*2.-1., suv.y);
+    float t = floor(uTime*12.)/12.; // и по времени — дёрганье как в спрайтовой анимации
     float n = fbm(vec2(q.x*2.6, q.y*3.2 - t*2.6) + uSeed.xy);
     float n2 = fbm(vec2(q.x*5., q.y*6. - t*4.1) + uSeed.yz);
     float I = clamp(uI, 0., 1.);
@@ -253,6 +264,7 @@ layer('15_camp_left', { lit: 1.2 });
 const steam = new Particles(80, THREE.NormalBlending); scene.add(steam.points);
 const radioLed = glow(16, 10, [0.5, 1.0, 0.4]); radioLed.position.set(P.radio[0], wy(P.radio[1]), 0); scene.add(radioLed);
 const smoke = new Particles(160, THREE.NormalBlending); scene.add(smoke.points);
+smoke.points.material.uniforms.uCells.value = 14; steam.points.material.uniforms.uCells.value = 8; // дым мягче искр
 const fireGlow = glow(700, 420, [1.0, 0.42, 0.12]); fireGlow.position.set(P.fire[0], wy(P.fire[1] - 60), 0); scene.add(fireGlow);
 layer('16_foreground', { lit: 0.9 });
 
@@ -321,8 +333,15 @@ wake(); renderPicker();
 function resize() {
   const vw = innerWidth, vh = innerHeight; let w = vw, h = Math.round(vw * 9 / 16);
   if (h > vh) { h = vh; w = Math.round(vh * 16 / 9); }
-  const dpr = Math.min(devicePixelRatio || 1, 2);
-  renderer.setSize(Math.round(w * dpr), Math.round(h * dpr), false);
+  const dpr = devicePixelRatio || 1;
+  let bw = Math.round(w * dpr), bh = Math.round(h * dpr);
+  const cap = Math.min(1, 1920 / bw, 1080 / bh); // не больше 1920x1080 — бережём ТВ
+  bw = Math.round(bw * cap); bh = Math.round(bh * cap);
+  renderer.setSize(bw, bh, false);
+  if (LOW) { RW = 480; RH = 270; } else { RW = bw; RH = bh; }
+  rt.setSize(RW, RH); pxScale.value = RW / W;
+  // если буфер урезан капом, CSS всё равно растягивает его — ровно в w x h (dpr-aware)
+  if (cap === 1) { w = bw / dpr; h = bh / dpr; }
   Object.assign(canvas.style, { width: w + 'px', height: h + 'px', left: (vw - w) / 2 + 'px', top: (vh - h) / 2 + 'px' });
 }
 addEventListener('resize', resize); resize();
@@ -361,7 +380,7 @@ function frame(now) {
   const fI = Math.min(1, I + burst * 0.15);
   flame.visible = fI > 0.02;
   flame.scale.set(FIRE_W * (0.45 + 0.55 * fI), FIRE_H * (0.3 + 0.7 * fI), 1);
-  flameMat.uniforms.uI.value = fI;
+  flameMat.uniforms.uI.value = fI; flameMat.uniforms.uSize.value.set(flame.scale.x, flame.scale.y);
   for (let k = 0; k < (0.6 + 5 * I + burst * 8) * dt; k++) if (I > 0.03 || Math.random() < 0.02)
     sparks.spawn({ x: fx + rand(-40, 40), y: fy - 60 - 120 * I, vx: rand(-30, 30), vy: -rand(120, 300) * (0.5 + I), life: rand(1, 2.8), ph: rand(0, 6) });
   sparks.update(dt, (p, dt, k) => {
