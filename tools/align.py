@@ -71,3 +71,48 @@ bl=Image.blend(comp.convert('RGB'),Image.fromarray(ref),0.5); bl.save('/workspac
 os.makedirs('/workspace/campfire/public/layers/half',exist_ok=True)
 for n in sorted(report):
     Image.open(AL+n+'.png').resize((W//2,(H+1)//2),Image.LANCZOS).save('/workspace/campfire/public/layers/half/'+n+'.png',optimize=True)
+
+# --- заполнение краёв: слои, которые должны доходить до края кадра, «дотягиваем» повторением крайнего пикселя
+EDGE_LAYERS = ['08_ground']  # остальное у края закрывает кадрирование камеры (18 px)
+def edge_fill(name, margin=40):
+    a = np.array(Image.open(AL + name + '.png').convert('RGBA'))
+    al = a[..., 3]
+    for y in range(H):
+        xs = np.where(al[y] > 128)[0]
+        if len(xs) == 0: continue
+        if xs[0] < margin: a[y, :xs[0]] = a[y, xs[0]]
+        if xs[-1] > W - 1 - margin: a[y, xs[-1] + 1:] = a[y, xs[-1]]
+    Image.fromarray(a).save(AL + name + '.png')
+for n in EDGE_LAYERS: edge_fill(n, 20)
+comp = Image.new('RGBA', (W, H))
+for n in sorted(report):
+    if n == '03_clouds': continue  # облака теперь процедурные
+    comp.alpha_composite(Image.open(AL + n + '.png').convert('RGBA'))
+comp.save('/workspace/campfire_layers/composite_preview.png')
+sbs = Image.new('RGB', (W * 2, H)); sbs.paste(comp.convert('RGB'), (0, 0)); sbs.paste(Image.fromarray(ref), (W, 0)); sbs.save('/workspace/campfire_layers/side_by_side.png')
+for n in sorted(report):
+    Image.open(AL + n + '.png').resize((W // 2, (H + 1) // 2), Image.LANCZOS).save('/workspace/campfire/public/layers/half/' + n + '.png', optimize=True)
+
+# озеро — плоская вода: закрываем все дыры в строках ниже горизонта (сквозь них просвечивало небо)
+a = np.array(Image.open(AL + '06_lake.png').convert('RGBA'))
+shore_a = np.array(Image.open(AL + '05_far_shore.png'))[..., 3]
+for y in range(440, H):
+    m = a[y, :, 3] > 128
+    if m.sum() < 10:
+        if y > 0: a[y] = a[y - 1]
+        continue
+    xs = np.arange(W); idx = np.interp(xs, xs[m], xs[m]).astype(int)
+    near = np.where(m, xs, -1)
+    # ближайший непрозрачный пиксель слева/справа
+    left = np.maximum.accumulate(near); right = np.where(m, xs, W * 2)[::-1]; right = np.minimum.accumulate(right)[::-1]
+    pick = np.where(left >= 0, left, right)
+    pick = np.where((right < W) & ((left < 0) | (right - xs < xs - left)), right, pick)
+    fill = (~m) & (shore_a[y] < 128); a[y, fill, :3] = a[y, pick[fill], :3]; a[y, fill, 3] = 255
+Image.fromarray(a).save(AL + '06_lake.png')
+Image.open(AL + '06_lake.png').resize((W // 2, (H + 1) // 2), Image.LANCZOS).save('/workspace/campfire/public/layers/half/06_lake.png', optimize=True)
+comp = Image.new('RGBA', (W, H))
+for n in sorted(report):
+    if n == '03_clouds': continue
+    comp.alpha_composite(Image.open(AL + n + '.png').convert('RGBA'))
+comp.save('/workspace/campfire_layers/composite_preview.png')
+sbs = Image.new('RGB', (W * 2, H)); sbs.paste(comp.convert('RGB'), (0, 0)); sbs.paste(Image.fromarray(ref), (W, 0)); sbs.save('/workspace/campfire_layers/side_by_side.png')

@@ -52,3 +52,20 @@ test('load with empty or broken storage gives fresh fire', () => {
   const s = mem(); s.setItem(STORAGE_KEY, '{bad');
   assert.equal(Fire.load(s, 0).fuel, START_FUEL);
 });
+test('extinguish sets fuel to 0 and saves', () => {
+  const s = mem();
+  const f = new Fire({ fuel: 900, now: 0 }).addLog('oak', 0);
+  f.extinguish(1000); f.save(s);
+  assert.equal(f.fuel, 0); assert.equal(f.intensity, 0); assert.ok(f.isOut);
+  assert.equal(JSON.parse(s.getItem(STORAGE_KEY)).fuel, 0);
+  assert.equal(Fire.load(s, 5000).fuel, 0);
+});
+test('add log after extinguish relights', () => {
+  const f = new Fire({ fuel: 100, now: 0 }).extinguish(0).addLog('birch', 0);
+  assert.equal(f.fuel, 1200); assert.ok(f.intensity > 0);
+});
+test('add log gives a flare and different types burn differently', () => {
+  const a = new Fire({ fuel: 0, now: 0 }).addLog('chips', 0), b = new Fire({ fuel: 0, now: 0 }).addLog('oak', 0);
+  assert.ok(a.boost > 0); assert.ok(b.fuel > a.fuel);
+  assert.ok(a.tick(301_000).isOut); assert.ok(!b.tick(301_000).isOut);
+});

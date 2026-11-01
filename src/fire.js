@@ -37,6 +37,12 @@ export class Fire {
     this.boost = Math.min(1, this.boost + 0.6);
     return this;
   }
+  /** Потушить: топливо в ноль, вспышка сброшена. */
+  extinguish(now = Date.now()) {
+    this.tick(now);
+    this.fuel = 0; this.boost = 0;
+    return this;
+  }
   /** Интенсивность 0..1: плавная кривая от запаса топлива. 0 = погас. */
   get intensity() {
     if (this.fuel <= 0) return 0;

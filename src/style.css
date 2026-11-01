@@ -1,18 +1,28 @@
 html,body{margin:0;height:100%;background:#000;overflow:hidden;user-select:none;-webkit-tap-highlight-color:transparent}
+body{font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;color:#f4e6cf}
 body.idle{cursor:none}
-#c{position:absolute;image-rendering:pixelated;image-rendering:crisp-edges}
-#overlay,#hud{position:absolute;font-family:"Courier New",monospace;font-weight:bold;color:#f3d9a4;letter-spacing:.08em;text-shadow:2px 2px 0 #000}
-#overlay{left:0;right:0;top:0;bottom:0;display:flex;align-items:center;justify-content:center;transition:opacity 1.5s}
-#overlay .box{background:#0009;border:3px solid #f3d9a466;padding:.6em 1.2em;font-size:clamp(14px,2vw,36px);animation:pulse 3s ease-in-out infinite;text-align:center}
-@keyframes pulse{50%{opacity:.5}}
-#overlay.gone{opacity:0;pointer-events:none}
-#hud{left:0;right:0;bottom:4%;display:flex;flex-direction:column;align-items:center;gap:.6em;transition:opacity 1.2s}
-body.idle #hud{opacity:0;pointer-events:none}
-#picker{background:#120a06cc;border:3px solid #8a5a2c;padding:.5em .8em;font-size:clamp(12px,1.5vw,28px);text-align:center}
-#picker .row{display:flex;gap:.6em}
-#picker .item{padding:.25em .5em;border:3px solid transparent;opacity:.6;cursor:pointer}
-#picker .item.sel{border-color:#f3a64a;opacity:1;background:#3a1c0a}
-#picker .info{margin-top:.3em;font-size:.7em;opacity:.8}
-.buttons{display:flex;gap:.6em}
-button{font:inherit;font-size:clamp(11px,1.2vw,22px);color:#f3d9a4;background:#120a06cc;border:3px solid #8a5a2c;padding:.3em .8em;cursor:pointer}
-button:focus-visible{outline:3px solid #f3a64a}
+#c{position:absolute;display:block}
+.glass{background:rgba(18,14,22,.42);-webkit-backdrop-filter:blur(10px) saturate(1.2);backdrop-filter:blur(10px) saturate(1.2);
+  border:1px solid rgba(255,230,200,.16);border-radius:14px;box-shadow:0 6px 24px rgba(0,0,0,.35)}
+#overlay{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;transition:opacity 1.2s;pointer-events:none}
+#overlay .hint{background:rgba(18,14,22,.45);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);border:1px solid rgba(255,230,200,.16);
+  border-radius:14px;padding:.7em 1.1em;font-size:clamp(13px,1.15vw,22px);text-align:center;line-height:1.5;animation:pulse 3.5s ease-in-out infinite}
+#overlay small{opacity:.7;font-size:.8em}
+@keyframes pulse{50%{opacity:.6}}
+#overlay.gone{opacity:0}
+#hud{position:absolute;left:50%;bottom:2.2%;transform:translateX(-50%);display:flex;flex-wrap:wrap;align-items:center;gap:6px;
+  padding:6px;font-size:clamp(11px,.8vw,17px);transition:opacity 1s,transform 1s;max-width:96vw;justify-content:center}
+body.idle #hud{opacity:0;pointer-events:none;transform:translate(-50%,8px)}
+button{font:inherit;color:inherit;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.1);border-radius:9px;
+  padding:.42em .8em;display:inline-flex;align-items:center;gap:.45em;cursor:pointer;transition:background .2s,border-color .2s}
+button:hover{background:rgba(255,255,255,.13)}
+button svg{width:1.05em;height:1.05em;flex:none}
+button.primary{background:rgba(240,138,36,.28);border-color:rgba(255,170,80,.4)}
+button.off{opacity:.55}
+button:focus{outline:none}
+button:focus-visible{outline:2px solid #ffb35c;outline-offset:2px;box-shadow:0 0 0 4px rgba(255,179,92,.25)}
+.seggroup{display:inline-flex;background:rgba(0,0,0,.25);border-radius:9px;padding:2px;gap:2px}
+.seggroup .seg{border:none;background:transparent;border-radius:7px;padding:.38em .7em;opacity:.7}
+.seggroup .seg.sel{background:rgba(255,190,120,.22);opacity:1}
+.sep{width:1px;height:1.4em;background:rgba(255,255,255,.14);margin:0 2px}
+#info{flex-basis:100%;text-align:center;font-size:.82em;opacity:.65;padding:0 4px 2px}

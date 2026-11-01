@@ -9,13 +9,15 @@
 </head>
 <body>
 <canvas id="c"></canvas>
-<div id="overlay"><div class="box">Нажмите OK или коснитесь экрана, чтобы включить звук</div></div>
-<div id="hud">
-  <div id="picker"><div class="row"></div><div class="info"></div></div>
-  <div class="buttons">
-    <button id="mute" type="button">Звук: вкл</button>
-    <button id="fs" type="button">На весь экран</button>
-  </div>
+<div id="overlay"><div class="hint">Нажмите любую кнопку или коснитесь экрана — включится звук.<br><small>Дрова: кнопка «Подбросить дрова» или клавиша L</small></div></div>
+<div id="hud" class="glass">
+  <div class="seggroup" id="logtype" role="radiogroup" aria-label="Тип дров"></div>
+  <button id="add" type="button" class="primary"><svg viewBox="0 0 16 16"><path d="M2 11l10-5 2 2-10 5z M3 6l8 4" stroke="currentColor" fill="none" stroke-width="1.6"/></svg><span>Подбросить дрова</span></button>
+  <button id="douse" type="button"><svg viewBox="0 0 16 16"><path d="M8 2C6 6 4 8 4 10.5a4 4 0 008 0C12 8 10 6 8 2z" fill="currentColor"/></svg><span>Потушить костёр</span></button>
+  <span class="sep"></span>
+  <button id="mute" type="button" class="icon" aria-label="Звук"><svg viewBox="0 0 16 16"><path d="M2 6h3l4-3v10l-4-3H2z" fill="currentColor"/><path d="M11 5.5a3.5 3.5 0 010 5" stroke="currentColor" fill="none" stroke-width="1.4"/></svg><span>Звук</span></button>
+  <button id="fs" type="button" class="icon" aria-label="На весь экран"><svg viewBox="0 0 16 16"><path d="M2 6V2h4M10 2h4v4M14 10v4h-4M6 14H2v-4" stroke="currentColor" fill="none" stroke-width="1.6"/></svg><span>Экран</span></button>
+  <div id="info"></div>
 </div>
 <script type="module" src="./src/main.js"></script>
 </body>

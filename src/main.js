@@ -25,7 +25,9 @@ const renderer = new THREE.WebGLRenderer({ canvas, antialias: false, powerPrefer
 renderer.setPixelRatio(1);
 const rt = new THREE.WebGLRenderTarget(RW, RH, { minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter, generateMipmaps: false });
 const scene = new THREE.Scene();
-const cam = new THREE.OrthographicCamera(0, W, H, 0, -10, 10); // y вверх; переводим через wy()
+// Кадр чуть уже холста слоёв: по краям у сгенерированных слоёв бывают пустые пиксели (была синяя полоска слева)
+const CROP_X = 18, CROP_Y = CROP_X * H / W;
+const cam = new THREE.OrthographicCamera(CROP_X, W - CROP_X, H - CROP_Y, CROP_Y, -10, 10); // y вверх; переводим через wy()
 const wy = (y) => H - y;
 
 // ---------- шейдер слоёв ----------
@@ -185,7 +187,33 @@ class Particles {
 // ---------- сборка сцены (сзади вперёд) ----------
 layer('01_sky', { kind: 'sky', lit: 0 });
 layer('02_moon', { lit: 0, amb: 1.25 });
-const clouds = layer('03_clouds', { kind: 'cloud', lit: 0, amb: 0.9 });
+// Процедурные облака вместо мультяшного PNG: тонкие перистые/слоистые полосы, низкая прозрачность
+const cloudMat = new THREE.ShaderMaterial({ vertexShader: layerVert, transparent: true, depthTest: false, depthWrite: false,
+  uniforms: { uTime: shared.uTime, uMoon: shared.uMoon },
+  fragmentShader: `uniform float uTime; uniform vec2 uMoon; varying vec2 vUv;
+  float hash(vec2 p){ return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453); }
+  float noise(vec2 p){ vec2 i=floor(p),f=fract(p); f=f*f*(3.-2.*f);
+    return mix(mix(hash(i),hash(i+vec2(1,0)),f.x),mix(hash(i+vec2(0,1)),hash(i+vec2(1,1)),f.x),f.y); }
+  float fbm(vec2 p){ float v=0.,a=.5; for(int i=0;i<5;i++){ v+=a*noise(p); p=p*2.02+vec2(3.1,1.7); a*=.5; } return v; }
+  float dens(vec2 p){
+    vec2 q = vec2(p.x*0.0032 - uTime*0.004, p.y*0.016);          // сильно растянуто по горизонтали
+    float w = fbm(q + vec2(fbm(q*1.7+uTime*0.003)*1.2, 0.));       // перистая «вытянутость»
+    float band = smoothstep(60., 170., p.y) * smoothstep(420., 250., p.y);   // облака только в небе
+    float nearMoon = exp(-pow(length((p-uMoon)*vec2(.6,1.6))/260.,2.));
+    return smoothstep(.46, .82, w) * band * (0.55 + 0.6*nearMoon);
+  }
+  void main(){
+    vec2 p = vec2(vUv.x*${W}., (1.-vUv.y)*${H}.);
+    p = (floor(p/${PIX.toFixed(4)})+.5)*${PIX.toFixed(4)};          // та же пиксельная сетка
+    float d = dens(p);
+    if (d < 0.02) discard;
+    vec2 dir = normalize(uMoon - p);
+    float rim = clamp(d - dens(p + dir*14.), 0., 1.);               // кромка, обращённая к луне
+    float near = exp(-length(p-uMoon)/380.);
+    vec3 col = mix(vec3(.16,.2,.32), vec3(.42,.48,.62), near) + vec3(.6,.66,.8)*rim*near*1.4;
+    gl_FragColor = vec4(col, clamp(d,0.,1.)*0.42);
+  }` });
+const clouds = new THREE.Mesh(plane, cloudMat); clouds.position.set(W / 2, H / 2, 0); clouds.renderOrder = order++; scene.add(clouds);
 const mountains = layer('04_mountains', { lit: 0 });
 const shore = layer('05_far_shore', { lit: 0, amb: 0.95 });
 const lake = layer('06_lake', { kind: 'lake', lit: 0.15 });
@@ -205,56 +233,65 @@ for (const g of [lanternFlame, lanternGlow]) { g.position.set(P.lanternFlame[0] 
 layer('11_firering', { lit: 1.0 });
 layer('12_fire_logs', { lit: 1.0 });
 const coal = glow(300, 90, [1.0, 0.28, 0.05], { noise: 1 }); coal.position.set(P.fire[0], wy(P.fire[1] + 5), 0); scene.add(coal);
-const FIRE_W = 270, FIRE_H = 310; // размер квада пламени при полной силе (px мира)
-const flameMat = new THREE.ShaderMaterial({ vertexShader: layerVert, transparent: true, depthTest: false, depthWrite: false,
-  uniforms: { uTime: shared.uTime, uI: { value: 0 }, uSize: { value: new THREE.Vector2(1, 1) }, uSeed: { value: new THREE.Vector3(Math.random() * 9, Math.random() * 9, Math.random() * 9) } },
-  fragmentShader: `uniform float uTime,uI; uniform vec2 uSize; uniform vec3 uSeed; varying vec2 vUv;
+// Пламя в три слоя: задний широкий тусклый, средний оранжевый, переднее бело-жёлтое ядро.
+// У каждого слоя свои языки (позиция, высота, ширина, фаза), скорость и зерно шума.
+const flameFrag = `uniform float uTime,uI,uSpeed,uMode; uniform vec2 uSize; uniform vec3 uSeed; uniform vec4 uT[6]; varying vec2 vUv;
   float hash(vec2 p){ return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453); }
   float noise(vec2 p){ vec2 i=floor(p),f=fract(p); f=f*f*(3.-2.*f);
     return mix(mix(hash(i),hash(i+vec2(1,0)),f.x),mix(hash(i+vec2(0,1)),hash(i+vec2(1,1)),f.x),f.y); }
   float fbm(vec2 p){ float v=0.,a=.5; for(int i=0;i<4;i++){ v+=a*noise(p); p=p*2.03+1.7; a*=.5; } return v; }
-  // один язык пламени: капля, сужающаяся кверху, с изгибом от шума
-  float tongue(vec2 q, float cx, float h, float w, float n){
+  float tongue(vec2 q, vec4 T, float hs, float n, float t){
+    if (T.z <= 0.) return 0.;
+    float fl = .72 + .28*sin(t*(2.2+T.w*.9) + T.w*7.) + .22*(noise(vec2(t*(1.5+T.w*.4), T.w*13.)) - .5);
+    float h = T.y*hs*fl;
     float y = q.y / h; if (y > 1.05) return 0.;
-    float bend = (n - .5) * .55 * y + sin(uTime*2.3 + cx*9.)*.04*y;
-    float width = w * pow(max(0., 1. - y), .9) * (0.55 + .45*smoothstep(0., .22, y + .02));
-    float d = abs(q.x - cx - bend) / max(width, 1e-3);
-    return clamp(1. - d, 0., 1.) * (1. - y*.55);
+    float bend = (n - .5) * .6 * y + sin(t*2.1 + T.w*5.)*.05*y;
+    float width = T.z * pow(max(0., 1. - y), .9) * (0.55 + .45*smoothstep(0., .22, y + .02));
+    float d = abs(q.x - T.x - bend) / max(width, 1e-3);
+    return clamp(1. - d, 0., 1.) * (1. - y*.5);
   }
   void main(){
-    vec2 cells = uSize / ${PIX.toFixed(4)}; // пиксельная сетка ~3.5 px мира
+    vec2 cells = uSize / ${PIX.toFixed(4)};
     vec2 suv = (floor(vUv*cells)+.5)/cells;
     vec2 q = vec2(suv.x*2.-1., suv.y);
-    float t = floor(uTime*12.)/12.; // и по времени — дёрганье как в спрайтовой анимации
-    float n = fbm(vec2(q.x*2.6, q.y*3.2 - t*2.6) + uSeed.xy);
-    float n2 = fbm(vec2(q.x*5., q.y*6. - t*4.1) + uSeed.yz);
+    float t = floor(uTime*12.)/12. * uSpeed;
+    float n = fbm(vec2(q.x*2.4, q.y*3. - t*2.4) + uSeed.xy);
+    float n2 = fbm(vec2(q.x*5., q.y*6. - t*3.8) + uSeed.yz);
     float I = clamp(uI, 0., 1.);
-    // три языка мерцают независимо; на слабом огне — низкие и узкие
-    float f1 = .75 + .25*sin(t*3.1 + uSeed.x) + .18*(noise(vec2(t*1.7, 1.)) - .5);
-    float f2 = .8 + .2*sin(t*2.3 + uSeed.y*2.) + .2*(noise(vec2(t*2.1, 5.)) - .5);
-    float f3 = .75 + .25*sin(t*3.7 + uSeed.z) + .18*(noise(vec2(t*1.9, 9.)) - .5);
-    float hs = mix(.28, 1., I);
+    float hs = mix(.3, 1., I);
     float heat = 0.;
-    heat = max(heat, tongue(q, -.28, .6*hs*f1, .28, n));
-    heat = max(heat, tongue(q,  .02, .95*hs*f2, .4, n));
-    heat = max(heat, tongue(q,  .3, .55*hs*f3, .26, n));
-    // низовой слой огня над углями
-    heat = max(heat, clamp(1. - abs(q.x)*1.7, 0., 1.) * smoothstep(.12*hs, 0., q.y) * .62);
-    heat = heat + (n2 - .5) * .45 * heat - q.y * .08;
+    for (int i = 0; i < 6; i++) heat = max(heat, tongue(q, uT[i], hs, n, t));
+    heat = max(heat, clamp(1. - abs(q.x)*1.25, 0., 1.) * smoothstep(.14*hs, 0., q.y) * .6);
+    heat = heat + (n2 - .5) * .45 * heat - q.y * .06;
     heat *= .75 + .35*I;
-    // палитра: тёмный край, красный, оранжевый, жёлтый, бело-жёлтое ядро
+    heat *= smoothstep(.0, .1, q.y + (n2-.5)*.08) * (1. - smoothstep(.75, 1., abs(q.x))); // без резких краёв квада
     vec3 c; float a = 1.;
-    if (heat > .78) c = vec3(1., .96, .78);
-    else if (heat > .6) c = vec3(1., .82, .32);
-    else if (heat > .42) c = vec3(.98, .52, .12);
-    else if (heat > .26) c = vec3(.82, .24, .06);
-    else if (heat > .14) { c = vec3(.42, .09, .04); a = .75; }
-    else discard;
+    if (uMode < .5) {            // задний слой: тёмно-красный/оранжевый, полупрозрачный
+      if (heat > .5) c = vec3(.92,.38,.08); else if (heat > .28) c = vec3(.7,.18,.05); else if (heat > .13) { c = vec3(.36,.07,.03); a = .7; } else discard;
+      a *= .85;
+    } else if (uMode < 1.5) {    // средний: оранжевый
+      if (heat > .6) c = vec3(1.,.72,.22); else if (heat > .34) c = vec3(.98,.5,.12); else discard;
+    } else {                     // ядро: бело-жёлтое
+      if (heat > .58) c = vec3(1.,.97,.8); else if (heat > .36) c = vec3(1.,.86,.42); else discard;
+    }
     gl_FragColor = vec4(c, a);
-  }` });
+  }`;
 const flameGeo = new THREE.PlaneGeometry(1, 1); flameGeo.translate(0, 0.5, 0);
-const flame = new THREE.Mesh(flameGeo, flameMat); flame.renderOrder = order++;
-const FLAME_BASE_Y = P.fire[1] + 18; flame.position.set(P.fire[0], wy(FLAME_BASE_Y), 0); scene.add(flame);
+const FLAME_BASE_Y = P.fire[1] + 40; // основание прячется за передними камнями
+const T = (x, h, w, ph) => new THREE.Vector4(x, h, w, ph);
+const FLAME_LAYERS = [
+  { mode: 0, w: 340, h: 320, speed: 0.8, tongues: [T(-.62, .45, .2, 1.1), T(-.32, .7, .26, 2.3), T(0, .82, .32, 3.7), T(.3, .66, .26, 4.2), T(.6, .42, .2, 5.9)] },
+  { mode: 1, w: 270, h: 350, speed: 1.0, tongues: [T(-.42, .6, .26, .7), T(-.08, .95, .34, 1.9), T(.26, .78, .3, 3.3), T(.55, .45, .2, 6.1)] },
+  { mode: 2, w: 170, h: 250, speed: 1.25, tongues: [T(-.22, .72, .36, 2.6), T(.2, .9, .4, 4.8)] },
+];
+const flames = FLAME_LAYERS.map((L) => {
+  const tongues = [...L.tongues]; while (tongues.length < 6) tongues.push(T(0, 0, 0, 0));
+  const mat = new THREE.ShaderMaterial({ vertexShader: layerVert, fragmentShader: flameFrag, transparent: true, depthTest: false, depthWrite: false,
+    uniforms: { uTime: shared.uTime, uI: { value: 0 }, uSpeed: { value: L.speed }, uMode: { value: L.mode }, uT: { value: tongues },
+      uSize: { value: new THREE.Vector2(1, 1) }, uSeed: { value: new THREE.Vector3(Math.random() * 9, Math.random() * 9, Math.random() * 9) } } });
+  const m = new THREE.Mesh(flameGeo, mat); m.renderOrder = order++; m.position.set(P.fire[0], wy(FLAME_BASE_Y), 0); scene.add(m);
+  return { m, L };
+});
 // передние камни кольца рисуем повторно поверх пламени
 const ringFront = layer('11_firering', { lit: 1.0, extra: { uClipY: { value: CLIP_Y } } });
 const sparks = new Particles(150, THREE.AdditiveBlending); scene.add(sparks.points);
@@ -282,67 +319,80 @@ const vnow = () => clock0 + (performance.now() - t0) * SPEED;
 const fuelParam = params.get('fuel'); // ?fuel=60: стартовый запас в секундах (отладка)
 const fire = fuelParam !== null ? new Fire({ fuel: Number(fuelParam), now: vnow() })
   : SPEED === 1 ? Fire.load(localStorage, vnow()) : new Fire({ now: vnow() });
-let shown = 0, ember = 0, lastFuelPositive = fire.fuel > 0;
+let shown = 0, ember = 0, doused = 0; // doused: секунд с момента тушения (0 — не тушили)
 const audio = new Ambience();
-let sel = 1;
+let sel = 1, burst = 0;
 
-const pickerRow = document.querySelector('#picker .row'), info = document.querySelector('#picker .info');
+const seg = document.getElementById('logtype'), info = document.getElementById('info');
 DEFAULT_LOGS.forEach((l, i) => {
-  const d = document.createElement('div'); d.className = 'item'; d.textContent = l.name; d.title = describeLog(l);
-  d.addEventListener('pointerdown', (e) => { e.stopPropagation(); sel = i; addLog(); }); pickerRow.appendChild(d);
+  const b = document.createElement('button'); b.type = 'button'; b.className = 'seg'; b.textContent = l.name; b.title = describeLog(l);
+  b.setAttribute('role', 'radio');
+  b.addEventListener('click', () => { sel = i; renderUI(); }); seg.appendChild(b);
 });
-function renderPicker() {
-  [...pickerRow.children].forEach((c, i) => c.classList.toggle('sel', i === sel));
+const persist = () => { if (SPEED === 1 && fuelParam === null) fire.save(); };
+function renderUI() {
+  [...seg.children].forEach((c, i) => { c.classList.toggle('sel', i === sel); c.setAttribute('aria-checked', i === sel); });
   const mins = Math.ceil(fire.fuel / 60);
-  info.textContent = `${describeLog(DEFAULT_LOGS[sel])} · ${fire.isOut ? (ember > 0.02 ? 'тлеют угли' : 'костёр погас') : `огня хватит на ~${mins} мин`} · ←/→ выбор, OK — подбросить`;
+  info.textContent = fire.isOut ? (ember > 0.02 ? 'тлеют угли' : 'костёр погас') : `огня хватит на ~${mins} мин · ${describeLog(DEFAULT_LOGS[sel])}`;
 }
-function addLog() { fire.addLog(DEFAULT_LOGS[sel].id, vnow()); if (SPEED === 1 && fuelParam === null) fire.save(); renderPicker(); burst = 1; }
-let burst = 0;
+function addLog() { fire.addLog(DEFAULT_LOGS[sel].id, vnow()); doused = 0; persist(); renderUI(); burst = 1; audio.thud?.(); }
+function douse() {
+  if (fire.isOut && ember < 0.05) return;
+  fire.extinguish(vnow()); persist();
+  doused = 0.001; audio.hiss();
+  const [fx, fy] = P.fire; // клуб пара
+  for (let k = 0; k < 70; k++) smoke.spawn({ x: fx + rand(-90, 90), y: fy - rand(0, 40), vx: rand(-25, 25), vy: -rand(50, 110), life: rand(2.5, 5), steam: 1 });
+  renderUI();
+}
 
 // ---------- интерфейс: ТВ-режим ----------
 let idleTimer;
-function wake() { document.body.classList.remove('idle'); clearTimeout(idleTimer); idleTimer = setTimeout(() => document.body.classList.add('idle'), 5000); }
+function wake() { document.body.classList.remove('idle'); clearTimeout(idleTimer); idleTimer = setTimeout(() => document.body.classList.add('idle'), 6000); }
 const overlay = document.getElementById('overlay');
 let started = false;
-function firstInteraction() { if (started) return; started = true; audio.start(); overlay.classList.add('gone'); }
-const muteBtn = document.getElementById('mute');
-function toggleMute() { audio.setMuted(!audio.muted); muteBtn.textContent = audio.muted ? 'Звук: выкл' : 'Звук: вкл'; }
-muteBtn.addEventListener('click', (e) => { e.stopPropagation(); firstInteraction(); toggleMute(); });
-const fsBtn = document.getElementById('fs');
+// Звук: AudioContext создаётся/возобновляется только внутри жеста пользователя
+function firstInteraction() { audio.start(); if (started) return; started = true; overlay.classList.add('gone'); }
+const muteBtn = document.getElementById('mute'), fsBtn = document.getElementById('fs');
+function toggleMute() { audio.setMuted(!audio.muted); muteBtn.querySelector('span').textContent = audio.muted ? 'Звук выкл' : 'Звук'; muteBtn.classList.toggle('off', audio.muted); }
 function toggleFs() {
   const d = document, el = d.documentElement;
   if (d.fullscreenElement || d.webkitFullscreenElement) (d.exitFullscreen || d.webkitExitFullscreen).call(d);
   else (el.requestFullscreen || el.webkitRequestFullscreen)?.call(el);
 }
-fsBtn.addEventListener('click', (e) => { e.stopPropagation(); firstInteraction(); toggleFs(); });
-for (const b of [muteBtn, fsBtn]) b.addEventListener('pointerdown', (e) => e.stopPropagation());
-window.addEventListener('pointerdown', () => { const was = started; firstInteraction(); wake(); if (was || true) addLog(); });
+document.getElementById('add').addEventListener('click', addLog);
+document.getElementById('douse').addEventListener('click', douse);
+muteBtn.addEventListener('click', toggleMute);
+fsBtn.addEventListener('click', toggleFs);
+// любой жест (клик, тап, клавиша пульта) включает звук; дрова по клику на сцену НЕ добавляются
+for (const ev of ['pointerdown', 'touchend', 'click']) window.addEventListener(ev, () => { firstInteraction(); wake(); }, { capture: true });
 window.addEventListener('pointermove', wake);
+const focusables = () => [...document.querySelectorAll('#hud button')];
 window.addEventListener('keydown', (e) => {
-  wake();
-  const onButton = document.activeElement?.tagName === 'BUTTON';
-  if (e.key === 'ArrowLeft') { sel = (sel + DEFAULT_LOGS.length - 1) % DEFAULT_LOGS.length; renderPicker(); }
-  else if (e.key === 'ArrowRight') { sel = (sel + 1) % DEFAULT_LOGS.length; renderPicker(); }
-  else if (e.key === 'm' || e.key === 'M' || e.key === 'ь' || e.key === 'Ь') { firstInteraction(); toggleMute(); }
-  else if (e.key === 'f' || e.key === 'F' || e.key === 'а' || e.key === 'А') { firstInteraction(); toggleFs(); }
-  else if (!onButton && (e.key === 'Enter' || e.key === ' ' || e.key === 'ArrowUp' || e.key === 'l')) { firstInteraction(); addLog(); e.preventDefault(); }
-  else firstInteraction();
-});
-wake(); renderPicker();
+  firstInteraction(); wake();
+  const list = focusables(), i = list.indexOf(document.activeElement);
+  const k = e.key;
+  if (k === 'ArrowLeft' || k === 'ArrowRight') { // навигация пультом между кнопками
+    const n = i < 0 ? list.indexOf(document.getElementById('add')) : (i + (k === 'ArrowRight' ? 1 : -1) + list.length) % list.length;
+    list[n].focus(); e.preventDefault();
+  } else if ((k === 'Enter' || k === ' ') && i < 0) { document.getElementById('add').focus(); e.preventDefault(); } // первое OK — показать фокус
+  else if (k === 'l' || k === 'L' || k === 'д' || k === 'Д') addLog();
+  else if (k === 'm' || k === 'M' || k === 'ь' || k === 'Ь') toggleMute();
+  else if (k === 'f' || k === 'F' || k === 'а' || k === 'А') toggleFs();
+}, { capture: true });
+wake(); renderUI();
 
 function resize() {
-  const vw = innerWidth, vh = innerHeight; let w = vw, h = Math.round(vw * 9 / 16);
-  if (h > vh) { h = vh; w = Math.round(vh * 16 / 9); }
+  // cover: кадр 16:9 заполняет экран целиком, лишнее обрезается — без полос
+  const vw = innerWidth, vh = innerHeight; const sc = Math.max(vw / 16, vh / 9);
+  let w = Math.ceil(sc * 16), h = Math.ceil(sc * 9);
   const dpr = devicePixelRatio || 1;
   let bw = Math.round(w * dpr), bh = Math.round(h * dpr);
   const cap = Math.min(1, 1920 / bw, 1080 / bh); // не больше 1920x1080 — бережём ТВ
   bw = Math.round(bw * cap); bh = Math.round(bh * cap);
   renderer.setSize(bw, bh, false);
   if (LOW) { RW = 480; RH = 270; } else { RW = bw; RH = bh; }
-  rt.setSize(RW, RH); pxScale.value = RW / W;
-  // если буфер урезан капом, CSS всё равно растягивает его — ровно в w x h (dpr-aware)
-  if (cap === 1) { w = bw / dpr; h = bh / dpr; }
-  Object.assign(canvas.style, { width: w + 'px', height: h + 'px', left: (vw - w) / 2 + 'px', top: (vh - h) / 2 + 'px' });
+  rt.setSize(RW, RH); pxScale.value = RW / (W - 2 * CROP_X);
+  Object.assign(canvas.style, { width: w + 'px', height: h + 'px', left: Math.floor((vw - w) / 2) + 'px', top: Math.floor((vh - h) / 2) + 'px' });
 }
 addEventListener('resize', resize); resize();
 
@@ -354,9 +404,12 @@ function frame(now) {
   fire.tick(vnow());
   const target = fire.intensity;
   // огонь разгорается за несколько секунд и угасает медленно
-  shown += (target - shown) * (target > shown ? 1 - Math.exp(-dt * 0.6) : 1 - Math.exp(-dt * 0.08));
-  if (fire.fuel > 0) ember = Math.max(ember, 0.25 + 0.5 * shown); else ember = Math.max(0, ember - dt * SPEED / 240);
-  const I = fire.isOut ? Math.min(shown, ember * 0.3) : shown;
+  if (doused > 0) doused += dt;
+  const downRate = doused > 0 ? 2.5 : 0.08; // после тушения пламя гаснет за ~1–2 с
+  shown += (target - shown) * (target > shown ? 1 - Math.exp(-dt * 0.6) : 1 - Math.exp(-dt * downRate));
+  if (fire.fuel > 0) ember = Math.max(ember, 0.25 + 0.5 * shown);
+  else ember = Math.max(0, ember - dt * (doused > 0 ? 0.75 / 15 : SPEED / 240)); // угли гаснут ~15 с после тушения
+  const I = fire.isOut ? Math.min(shown, doused > 0 ? shown : ember * 0.3) : shown;
   const flick = 0.82 + 0.1 * Math.sin(timeSec * 9.1) + 0.08 * Math.sin(timeSec * 23.7 + Math.sin(timeSec * 3.3)) + rand(-0.04, 0.04);
   Object.assign(shared.uTime, { value: timeSec }); shared.uFire.value = I; shared.uEmber.value = ember; shared.uFlick.value = flick;
   shared.uCloudOff.value.x = timeSec * 2.2; // облака плывут очень медленно
@@ -378,9 +431,11 @@ function frame(now) {
   const [fx, fy] = P.fire;
   burst = Math.max(0, burst - dt);
   const fI = Math.min(1, I + burst * 0.15);
-  flame.visible = fI > 0.02;
-  flame.scale.set(FIRE_W * (0.45 + 0.55 * fI), FIRE_H * (0.3 + 0.7 * fI), 1);
-  flameMat.uniforms.uI.value = fI; flameMat.uniforms.uSize.value.set(flame.scale.x, flame.scale.y);
+  for (const { m, L } of flames) {
+    m.visible = fI > 0.02;
+    m.scale.set(L.w * (0.5 + 0.5 * fI), L.h * (0.3 + 0.7 * fI), 1);
+    m.material.uniforms.uI.value = fI; m.material.uniforms.uSize.value.set(m.scale.x, m.scale.y);
+  }
   for (let k = 0; k < (0.6 + 5 * I + burst * 8) * dt; k++) if (I > 0.03 || Math.random() < 0.02)
     sparks.spawn({ x: fx + rand(-40, 40), y: fy - 60 - 120 * I, vx: rand(-30, 30), vy: -rand(120, 300) * (0.5 + I), life: rand(1, 2.8), ph: rand(0, 6) });
   sparks.update(dt, (p, dt, k) => {
@@ -388,11 +443,13 @@ function frame(now) {
     return { r: 1, g: 0.7 - k * 0.3, b: 0.3 - k * 0.2, size: 4 - k * 1.5, a: Math.pow(1 - k, 1.5) * 0.85 };
   });
   // дым
-  const smokeAmt = 2 + I * 6 + (fire.isOut ? ember * 8 : 0);
+  const smokeAmt = 2 + I * 6 + (fire.isOut ? ember * 8 : 0) + (doused > 0 && doused < 6 ? 25 : 0);
   for (let k = 0; k < smokeAmt * dt; k++) smoke.spawn({ x: fx + rand(-30, 30), y: fy - 40 - 150 * I, vx: rand(-6, 6), vy: -rand(25, 45), life: rand(5, 8) });
   smoke.update(dt, (p, dt, k) => {
     p.x += (p.vx + 9 + Math.sin(timeSec * 0.7 + p.life) * 8) * dt; p.y += p.vy * dt;
-    return { r: 0.42, g: 0.42, b: 0.47, size: 20 + k * 90, a: Math.sin(k * Math.PI) * 0.16 };
+    if (p.steam || doused > 0 && doused < 6 && p.age < 0.05) p.steam = 1;
+    return p.steam ? { r: 0.78, g: 0.8, b: 0.86, size: 26 + k * 120, a: Math.sin(k * Math.PI) * 0.26 }
+      : { r: 0.42, g: 0.42, b: 0.47, size: 20 + k * 90, a: Math.sin(k * Math.PI) * 0.16 };
   });
   // пар над кружкой
   if (Math.random() < dt * 3) steam.spawn({ x: P.mug[0] + rand(-10, 10), y: P.mug[1], life: rand(3, 5), ph: rand(0, 6) });
@@ -413,11 +470,11 @@ function frame(now) {
     return { r: 0.03, g: 0.03, b: 0.06, size: 22, a: 1, shape: 1 + Math.min(0.99, f * 0.98) };
   });
 
-  if (now > saveAt) { saveAt = now + 10000; if (SPEED === 1 && fuelParam === null) fire.save(); renderPicker(); }
+  if (now > saveAt) { saveAt = now + 10000; persist(); renderUI(); }
 
   renderer.setRenderTarget(rt); renderer.render(scene, cam);
   renderer.setRenderTarget(null); renderer.render(postScene, postCam);
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);
-window.__campfire = { fire, addLog, state: () => ({ shown, ember, fuel: fire.fuel }) };
+window.__campfire = { fire, addLog, douse, audio, state: () => ({ shown, ember, fuel: fire.fuel, doused, audio: audio.ctx?.state ?? 'none' }) };
