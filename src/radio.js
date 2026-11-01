@@ -1,6 +1,6 @@
 // Тюнер: интернет-станции через <audio>, переходы через эфирные помехи.
 // Станция «выплывает» из шума и «тонет» в нём; нерабочие пропускаются; без сети — только шум.
-export const TUNE = { fadeOut: 0.7, fadeIn: 2.2, timeout: 9, boost: 1.7, gap: 1.4, idleNoise: 1, stationNoise: 0.12 };
+export const TUNE = { fadeOut: 0.7, fadeIn: 2.2, timeout: 9, boost: 1.2, gap: 1.4, idleNoise: 1, stationNoise: 0.12 };
 
 /** Чистая логика выбора следующей станции с пропуском нерабочих. */
 export function nextIndex(n, from, dir, bad) {
