@@ -1,3 +1,4 @@
+import { rainParams } from './settings.js';
 // Процедурный звук: треск, гул огня, сверчки, сова. Без внешних файлов.
 export class Ambience {
   constructor() { this.ctx = null; this.intensity = 0.5; this.muted = false; this.volumes = {}; this.rain = false; }
@@ -27,7 +28,7 @@ export class Ambience {
     // дождь: белый шум, полоса 1.5–7 кГц, плюс редкие капли
     const rain = ctx.createBufferSource(); rain.buffer = this.noise; rain.loop = true;
     const rhp = ctx.createBiquadFilter(); rhp.type = 'highpass'; rhp.frequency.value = 1500;
-    const rlp = ctx.createBiquadFilter(); rlp.type = 'lowpass'; rlp.frequency.value = 7000;
+    const rlp = (this.rainLp = ctx.createBiquadFilter()); rlp.type = 'lowpass'; rlp.frequency.value = 7000;
     this.rainGain = ctx.createGain(); this.rainGain.gain.value = 0;
     rain.connect(rhp).connect(rlp).connect(this.rainGain).connect(this.bus.rain); rain.start();
     this.nextDrip = ctx.currentTime;
@@ -58,11 +59,13 @@ export class Ambience {
   setIntensity(v) { this.intensity = v; }
   /** Громкости слоёв 0..1: { fire, crickets, water, wind, owl, rain }. */
   setVolumes(v) { this.volumes = { ...this.volumes, ...v }; this.applyVolumes(); }
-  setRain(on) { this.rain = !!on; this.applyVolumes(); }
+  setRain(on, level = this.rainLevel ?? 0.35) { this.rain = !!on; this.rainLevel = level; this.applyVolumes(); }
   applyVolumes() {
     if (!this.bus) return; const t = this.ctx.currentTime;
     for (const [k, g] of Object.entries(this.bus)) g.gain.setTargetAtTime(this.volumes[k] ?? 1, t, 0.15);
-    this.rainGain.gain.setTargetAtTime(this.rain ? 0.09 : 0, t, 1.5);
+    const R = rainParams(this.rainLevel ?? 0.35); this.R = R;
+    this.rainGain.gain.setTargetAtTime(this.rain ? R.soundGain : 0, t, 1.5);
+    this.rainLp.frequency.setTargetAtTime(R.soundCutoff, t, 1.5);
   }
   /** Шипение при тушении: высокочастотный шум с затуханием + низкий «пых». */
   hiss() {
@@ -78,7 +81,7 @@ export class Ambience {
   drip(t) { // отдельная капля: короткий высокий «тик»
     const ctx = this.ctx, src = ctx.createBufferSource(); src.buffer = this.noise;
     const bp = ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 2500 + Math.random() * 4000; bp.Q.value = 4;
-    const g = ctx.createGain(); g.gain.setValueAtTime(0.05 + Math.random() * 0.08, t); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.03);
+    const g = ctx.createGain(); g.gain.setValueAtTime((0.05 + Math.random() * 0.08) * (this.R?.dripGain ?? 1), t); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.03);
     src.connect(bp).connect(g).connect(this.bus.rain); src.start(t, Math.random() * 3, 0.04);
   }
   /** Глухой стук полена. */
@@ -113,7 +116,7 @@ export class Ambience {
       const g = 0.035 + 0.05 * Math.max(0, Math.sin(now * 0.13) * Math.sin(now * 0.31 + 1));
       this.windGain.gain.setTargetAtTime(g, now, 1.2); this.windLp.frequency.setTargetAtTime(300 + g * 5000, now, 1.5);
     }
-    if (this.rain) while (this.nextDrip < ahead) { this.drip(this.nextDrip); this.nextDrip += 0.03 + Math.random() * 0.25; }
+    if (this.rain) while (this.nextDrip < ahead) { this.drip(this.nextDrip); this.nextDrip += (this.R?.dripInterval ?? 0.15) * (0.3 + Math.random() * 1.4); }
     else this.nextDrip = now;
     if (now > this.nextOwl) { this.owl(now + 0.1); this.nextOwl = now + 60 + Math.random() * 180; }
   }

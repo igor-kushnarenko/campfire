@@ -1,7 +1,7 @@
 // Медитативный пиксельный костёр у озера. Слои — PNG пользователя, вся анимация и свет — в коде.
 import * as THREE from 'three';
 import { Fire, DEFAULT_LOGS, describeLog, pickEmberFade, emberLevel } from './fire.js';
-import { SOUND_LAYERS, loadSettings, saveSettings, toggleRain } from './settings.js';
+import { SOUND_LAYERS, loadSettings, saveSettings, toggleRain, setRainLevel, rainParams } from './settings.js';
 // Временные тестовые кнопки скорости времени. Чтобы убрать — поставить false.
 const TEST_CONTROLS = true;
 import { Ambience } from './audio.js';
@@ -38,7 +38,7 @@ const KIND = { plain: 0, sky: 1, cloud: 2, lake: 3 };
 const layerVert = `varying vec2 vUv; void main(){ vUv=uv; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.); }`;
 const common = `
   uniform float uTime,uFire,uEmber,uLit,uAmb,uLanternLit,uKind,uFlick;
-  uniform vec2 uFirePos,uLanternPos,uMoon,uCloudOff; uniform float uRain;
+  uniform vec2 uFirePos,uLanternPos,uMoon,uCloudOff; uniform float uRain,uRainRing;
   uniform sampler2D map,uRefl1,uRefl2;
   varying vec2 vUv;
   const vec2 WH=vec2(${W}.,${H}.);
@@ -98,7 +98,7 @@ const layerFrag = common + `
         vec2 g = sq/vec2(30.,11.); vec2 cc = floor(g); float h = hash(cc);
         float ph = fract(uTime*0.6 + h*7.); vec2 f = (fract(g)-.5)*vec2(30.,11.);
         float r = length(f*vec2(1.,2.6));
-        float ring = smoothstep(1.6, 0., abs(r - ph*12.)) * (1.-ph) * step(.5, h);
+        float ring = smoothstep(1.6, 0., abs(r - ph*12.)) * (1.-ph) * step(1. - uRainRing, h);
         col += vec3(.45,.5,.62)*ring*.4*uRain;
       }
       float w = 14. + (p.y-${P.horizon}.)*0.32;
@@ -129,7 +129,7 @@ function loadTex(name) {
 const shared = {
   uTime: { value: 0 }, uFire: { value: 0 }, uEmber: { value: 0 }, uFlick: { value: 1 }, uLanternLit: { value: 0.8 },
   uFirePos: { value: new THREE.Vector2(...P.fire) }, uLanternPos: { value: new THREE.Vector2(...P.lanternFlame) },
-  uMoon: { value: new THREE.Vector2(...P.moon) }, uCloudOff: { value: new THREE.Vector2() }, uRain: { value: 0 },
+  uMoon: { value: new THREE.Vector2(...P.moon) }, uCloudOff: { value: new THREE.Vector2() }, uRain: { value: 0 }, uRainRing: { value: 0.3 }, uRainDen: { value: 0.2 }, uRainLen: { value: 1 }, uRainSlant: { value: 0.2 }, uRainA: { value: 1 }, uRainT: { value: 0 }, uRainDesat: { value: 0.2 }, uRainDark: { value: 0.1 }, uFogBoost: { value: 1 },
 };
 const plane = new THREE.PlaneGeometry(W, H);
 let order = 0;
@@ -229,7 +229,7 @@ const cloudMat = new THREE.ShaderMaterial({ vertexShader: layerVert, transparent
 const clouds = new THREE.Mesh(plane, cloudMat); clouds.position.set(W / 2, H / 2, 0); clouds.renderOrder = order++; scene.add(clouds);
 const mountains = layer('04_mountains', { lit: 0 });
 // лёгкий туман в низинах: мягкая полоса fbm, медленно плывёт
-const fogFrag = `uniform float uTime,uY0,uY1,uA; varying vec2 vUv;
+const fogFrag = `uniform float uTime,uY0,uY1,uA,uFogBoost; varying vec2 vUv;
   float hash(vec2 p){ return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453); }
   float noise(vec2 p){ vec2 i=floor(p),f=fract(p); f=f*f*(3.-2.*f);
     return mix(mix(hash(i),hash(i+vec2(1,0)),f.x),mix(hash(i+vec2(0,1)),hash(i+vec2(1,1)),f.x),f.y); }
@@ -240,13 +240,13 @@ const fogFrag = `uniform float uTime,uY0,uY1,uA; varying vec2 vUv;
     float h = uY1 - uY0;
     float band = smoothstep(uY0, uY0 + h*.45, p.y) * smoothstep(uY1, uY1 - h*.45, p.y);
     float d = fbm(vec2(p.x*.0045 - uTime*.006, p.y*.035 + uTime*.003));
-    float a = band * smoothstep(.38, .8, d) * uA;
+    float a = band * smoothstep(.38 - .08*(uFogBoost-1.), .8, d) * uA * uFogBoost;
     if (a < .004) discard;
     gl_FragColor = vec4(.48,.55,.68, a);
   }`;
 function fog(y0, y1, a) {
   const m = new THREE.Mesh(plane, new THREE.ShaderMaterial({ vertexShader: layerVert, fragmentShader: fogFrag, transparent: true, depthTest: false, depthWrite: false,
-    uniforms: { uTime: shared.uTime, uY0: { value: y0 }, uY1: { value: y1 }, uA: { value: a } } }));
+    uniforms: { uTime: shared.uTime, uY0: { value: y0 }, uY1: { value: y1 }, uA: { value: a }, uFogBoost: shared.uFogBoost } }));
   m.position.set(W / 2, H / 2, 0); m.renderOrder = order++; scene.add(m); return m;
 }
 fog(340, 425, 0.26); // между подножием гор и дальним берегом
@@ -256,26 +256,31 @@ lake.material.uniforms.uRefl1.value = mountains.material.uniforms.map.value;
 lake.material.uniforms.uRefl2.value = shore.material.uniforms.map.value;
 fog(425, 500, 0.2); // над дальней водой
 // дождь: тонкие пиксельные штрихи под небольшим углом, два слоя глубины
-const rainFrag = `uniform float uTime,uRain,uNear; varying vec2 vUv;
+const rainFrag = `uniform float uRain,uNear,uRainDen,uRainLen,uRainSlant,uRainA,uRainT; varying vec2 vUv;
   float hash(vec2 p){ return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453); }
   void main(){
     vec2 p = vec2(vUv.x*${W}., (1.-vUv.y)*${H}.);
-    float px = ${PIX.toFixed(4)} * (uNear > .5 ? 1. : .75);
+    float near = step(.5, uNear);
+    float px = ${PIX.toFixed(4)} * mix(.75, 1., near);
     p = (floor(p/px)+.5)*px;
-    float x = p.x + p.y*.2;                         // наклон
+    float x = p.x + p.y*uRainSlant;                  // наклон растёт с силой дождя (ветер)
     float c = floor(x/px);
-    float h = hash(vec2(c, uNear)), h2 = hash(vec2(c*1.7, 3.+uNear));
-    if (h2 > (uNear > .5 ? .35 : .55)) discard;      // разреженность
-    float speed = uNear > .5 ? 950. : 560.;
-    float per = uNear > .5 ? 300. : 200., len = uNear > .5 ? 26. : 13.;
-    float m = mod(p.y - uTime*speed*(.85+.3*h) + h*per*9., per);
+    float h = hash(vec2(c, uNear));
+    float per = mix(200., 300., near);
+    float len = mix(13., 26., near) * uRainLen;
+    float shift = uRainT * mix(560., 950., near) * (.85+.3*h) - h*per*9.; // фаза копится в JS — без рывков при смене скорости
+    float yy = p.y - shift;
+    float cyc = floor(yy/per);
+    // каждая капля «живёт» с вероятностью density — от единичных капель до ливня
+    if (hash(vec2(c*1.7 + cyc*13.1, 3.+uNear)) > uRainDen * mix(1.2, 1., near)) discard;
+    float m = mod(yy, per);
     if (m > len) discard;
-    float a = (uNear > .5 ? .32 : .2) * uRain * (m/len);
+    float a = mix(.2, .32, near) * uRain * uRainA * (m/len);
     gl_FragColor = vec4(.72,.78,.9, a);
   }`;
 function rainLayer(near) {
   const m = new THREE.Mesh(plane, new THREE.ShaderMaterial({ vertexShader: layerVert, fragmentShader: rainFrag, transparent: true, depthTest: false, depthWrite: false,
-    uniforms: { uTime: shared.uTime, uRain: shared.uRain, uNear: { value: near ? 1 : 0 } } }));
+    uniforms: { uRain: shared.uRain, uNear: { value: near ? 1 : 0 }, uRainDen: shared.uRainDen, uRainLen: shared.uRainLen, uRainSlant: shared.uRainSlant, uRainA: shared.uRainA, uRainT: shared.uRainT } }));
   m.position.set(W / 2, H / 2, 0); m.renderOrder = order++; scene.add(m); return m;
 }
 const rainFar = rainLayer(false);
@@ -383,10 +388,10 @@ const rainNear = rainLayer(true);
 
 // апскейл ближайшим соседом + лёгкая виньетка
 const post = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), new THREE.ShaderMaterial({
-  uniforms: { t: { value: rt.texture }, uRain: shared.uRain }, depthTest: false,
+  uniforms: { t: { value: rt.texture }, uRain: shared.uRain, uRainDesat: shared.uRainDesat, uRainDark: shared.uRainDark }, depthTest: false,
   vertexShader: `varying vec2 vUv; void main(){ vUv=uv; gl_Position=vec4(position.xy,0.,1.); }`,
-  fragmentShader: `uniform sampler2D t; uniform float uRain; varying vec2 vUv; void main(){ vec3 c=texture2D(t,vUv).rgb;
-    c = mix(c, vec3(dot(c, vec3(.3,.59,.11)))*vec3(.92,.96,1.05), .28*uRain) * (1. - .14*uRain); // дождь: темнее и бледнее
+  fragmentShader: `uniform sampler2D t; uniform float uRain,uRainDesat,uRainDark; varying vec2 vUv; void main(){ vec3 c=texture2D(t,vUv).rgb;
+    c = mix(c, vec3(dot(c, vec3(.3,.59,.11)))*vec3(.92,.96,1.05),  uRainDesat*uRain) * (1. - uRainDark*uRain); // дождь: темнее и бледнее
     vec2 q=vUv-.5; c*=1.-dot(q,q)*0.55; gl_FragColor=vec4(c,1.); }` }));
 const postScene = new THREE.Scene(); postScene.add(post); const postCam = new THREE.Camera();
 
@@ -400,11 +405,15 @@ let shown = 0, ember = 0, doused = 0, outAt = null, fadeDur = 420, emberStart = 
 const audio = new Ambience();
 let sel = 1, burst = 0;
 let settings = loadSettings();
-audio.setVolumes(settings.volumes); audio.setRain(settings.rain);
+audio.setVolumes(settings.volumes); audio.setRain(settings.rain, settings.rainLevel);
+let rainLevelShown = settings.rainLevel;
 shared.uRain.value = settings.rain ? 1 : 0;
 const rainBtn = document.getElementById('rain');
 function renderRain() { rainBtn.classList.toggle('on', settings.rain); rainBtn.setAttribute('aria-pressed', settings.rain); }
-rainBtn.addEventListener('click', () => { settings = toggleRain(settings); saveSettings(settings); audio.setRain(settings.rain); renderRain(); });
+rainBtn.addEventListener('click', () => { settings = toggleRain(settings); saveSettings(settings); audio.setRain(settings.rain, settings.rainLevel); renderRain(); });
+const rainLvl = document.getElementById('rainlvl');
+rainLvl.value = Math.round(settings.rainLevel * 100);
+rainLvl.addEventListener('input', () => { settings = setRainLevel(settings, rainLvl.value / 100); saveSettings(settings); audio.setRain(settings.rain, settings.rainLevel); });
 renderRain();
 const volPanel = document.getElementById('volumes'), volBtn = document.getElementById('volbtn');
 for (const { id, name } of SOUND_LAYERS) {
@@ -511,8 +520,14 @@ function frame(now) {
   const realDt = Math.max(0, (now - last) / 1000), dt = Math.min(0.1, realDt); last = now; timeSec += dt;
   vclock += realDt * 1000 * speed;
   shared.uRain.value += ((settings.rain ? 1 : 0) - shared.uRain.value) * (1 - Math.exp(-dt * 0.5));
+  rainLevelShown += (settings.rainLevel - rainLevelShown) * (1 - Math.exp(-dt * 1.2)); // плавно, без рывков
+  const RP = rainParams(rainLevelShown);
+  shared.uRainDen.value = RP.density; shared.uRainLen.value = RP.length; shared.uRainSlant.value = RP.slant;
+  shared.uRainA.value = RP.alpha; shared.uRainRing.value = RP.rings; shared.uRainDesat.value = RP.desat; shared.uRainDark.value = RP.darken;
+  shared.uRainT.value += dt * RP.speed;
+  shared.uFogBoost.value = 1 + shared.uRain.value * (RP.fog - 1);
   fire.tick(vnow());
-  const target = fire.intensity * (settings.rain ? 0.8 : 1); // под дождём огонь чуть приглушён
+  const target = fire.intensity * (1 - shared.uRain.value * RP.fireDamp); // под дождём приглушён (сильнее при ливне), но не гаснет
   // огонь разгорается за несколько секунд и угасает медленно
   if (doused > 0) doused += dt;
   const downRate = doused > 0 ? 2.5 : 0.08; // после тушения пламя гаснет за ~1–2 с
@@ -591,4 +606,4 @@ function frame(now) {
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);
-window.__campfire = { fire, addLog, douse, audio, state: () => ({ shown, ember, fuel: fire.fuel, doused, audio: audio.ctx?.state ?? 'none', rain: settings.rain, speed, outAt, fadeDur }), setSpeed: (v) => { speed = v; } };
+window.__campfire = { fire, addLog, douse, audio, state: () => ({ shown, ember, fuel: fire.fuel, doused, audio: audio.ctx?.state ?? 'none', rain: settings.rain, rainLevel: settings.rainLevel, rainShown: rainLevelShown, speed, outAt, fadeDur }), setSpeed: (v) => { speed = v; } };

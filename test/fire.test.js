@@ -93,3 +93,18 @@ test('volumes persist and are clamped', () => {
   const v = loadSettings(s).volumes;
   assert.equal(v.fire, 1); assert.equal(v.wind, 0); assert.equal(v.water, 1); assert.equal(v.owl, 0.3);
 });
+import { rainParams, setRainLevel } from '../src/settings.js';
+test('rain intensity mapping is monotonic and bounded', () => {
+  const lo = rainParams(0), hi = rainParams(1), mid = rainParams(0.5);
+  for (const k of ['density', 'speed', 'length', 'slant', 'rings', 'soundGain', 'soundCutoff', 'desat', 'darken', 'fog', 'fireDamp'])
+    assert.ok(lo[k] < mid[k] && mid[k] < hi[k], k);
+  assert.ok(lo.dripInterval > hi.dripInterval);
+  assert.ok(lo.density < 0.02, 'weakest = just a few drops');
+  assert.ok(hi.fireDamp < 0.5, 'downpour dampens but never puts the fire out');
+  assert.deepEqual(rainParams(-3), lo); assert.deepEqual(rainParams(7), hi);
+});
+test('rain level persists and is clamped', () => {
+  const s = mem();
+  saveSettings(setRainLevel(loadSettings(s), 0.9), s); assert.equal(loadSettings(s).rainLevel, 0.9);
+  saveSettings(setRainLevel(loadSettings(s), 4), s); assert.equal(loadSettings(s).rainLevel, 1);
+});

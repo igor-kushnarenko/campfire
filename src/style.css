@@ -37,3 +37,4 @@ button.on{background:rgba(120,170,255,.25);border-color:rgba(150,190,255,.45)}
 .test{border:1px dashed rgba(255,120,120,.5);align-items:center;flex-wrap:wrap}
 .test .tlabel{font-size:.75em;color:#ff9a9a;padding:0 .4em;flex-basis:100%;text-align:center}
 #info{font-size:.8em}
+.rainlvl{display:flex;align-items:center;gap:8px;padding:2px 6px;font-size:.9em}.rainlvl span{opacity:.8;white-space:nowrap}.rainlvl input{flex:1;min-width:90px;accent-color:#8fb4ff;height:1em}.rainlvl input:focus-visible{outline:2px solid #ffb35c;outline-offset:1px}
