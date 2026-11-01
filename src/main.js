@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import { pickEmberFade, emberLevel } from './fire.js';
 import { Woodpile, loadWood, saveWood, makeLog, SPECIES, heatCurve, PILE_MAX } from './wood.js';
 import { WoodView } from './woodview.js';
-import { SOUND_LAYERS, loadSettings, saveSettings, toggleRain, setRainLevel, rainParams } from './settings.js';
+import { SOUND_LAYERS, loadSettings, saveSettings, toggleRain, toggleRadio, setRadioVol, setRainLevel, rainParams } from './settings.js';
 // Временные тестовые кнопки скорости времени. Чтобы убрать — поставить false.
 const TEST_CONTROLS = true;
 import { Ambience } from './audio.js';
@@ -22,7 +22,7 @@ const SPEED = Math.max(1, Number(params.get('speed')) || 1); // ?speed=60 — у
 // Ключевые точки сцены (по выровненным слоям)
 const P = {
   fire: [790, 752], lanternPivot: [377, 168], lanternRing: [377, 222], lanternFlame: [377, 292],
-  mug: [372, 626], radio: [318, 806], moon: [1376, 123], horizon: 446,
+  mug: [372, 626], radio: [318, 806], radioBtn: [218, 810], moon: [1376, 123], horizon: 446,
 };
 
 const canvas = document.getElementById('c');
@@ -450,7 +450,10 @@ const ORD_AXE = order++;
 const chips = new Particles(90, THREE.NormalBlending); scene.add(chips.points); chips.points.material.uniforms.uCells.value = 2;
 layer('15_camp_left', { lit: 1.2 });
 const steam = new Particles(80, THREE.NormalBlending); scene.add(steam.points);
-const radioLed = glow(16, 10, [0.5, 1.0, 0.4]); radioLed.position.set(P.radio[0], wy(P.radio[1]), 0); scene.add(radioLed);
+// радио: кнопка-диод слева на корпусе (красный — выкл., зелёный — вкл.) и оранжевый ореол при наведении
+const radioHalo = glow(64, 64, [1.0, 0.55, 0.15]); radioHalo.position.set(P.radioBtn[0], wy(P.radioBtn[1]), 0); scene.add(radioHalo);
+const radioLed = glow(16, 16, [1.0, 0.12, 0.08]); radioLed.position.set(P.radioBtn[0], wy(P.radioBtn[1]), 0); scene.add(radioLed);
+let radioHover = 0, radioHoverT = 0;
 const smoke = new Particles(160, THREE.NormalBlending); scene.add(smoke.points);
 smoke.points.material.uniforms.uCells.value = 14; steam.points.material.uniforms.uCells.value = 8; // дым мягче искр
 const fireGlow = glow(700, 420, [1.0, 0.42, 0.12]); fireGlow.position.set(P.fire[0], wy(P.fire[1] - 60), 0); scene.add(fireGlow);
@@ -504,6 +507,29 @@ const rainLvl = document.getElementById('rainlvl');
 rainLvl.value = Math.round(settings.rainLevel * 100);
 rainLvl.addEventListener('input', () => { settings = setRainLevel(settings, rainLvl.value / 100); saveSettings(settings); audio.setRain(settings.rain, settings.rainLevel); });
 renderRain();
+// ---------- радио ----------
+const radioBtn = document.getElementById('radio'), radioVolEl = document.getElementById('radiovol');
+audio.setRadio(settings.radio, settings.radioVol);
+function renderRadio() {
+  radioBtn.classList.toggle('on', settings.radio); radioBtn.setAttribute('aria-pressed', settings.radio);
+  const box = document.querySelector('label.radiovol'); box.classList.toggle('collapsed', !settings.radio);
+  radioVolEl.disabled = !settings.radio; radioVolEl.tabIndex = settings.radio ? 0 : -1;
+  if (!settings.radio && document.activeElement === radioVolEl) radioBtn.focus();
+}
+function switchRadio() { firstInteraction(); settings = toggleRadio(settings); saveSettings(settings); audio.radioClick(); audio.setRadio(settings.radio, settings.radioVol); renderRadio(); }
+radioBtn.addEventListener('click', switchRadio);
+radioVolEl.value = Math.round(settings.radioVol * 100);
+radioVolEl.addEventListener('input', () => { settings = setRadioVol(settings, radioVolEl.value / 100); saveSettings(settings); audio.setRadio(settings.radio, settings.radioVol); });
+renderRadio();
+const hitRadio = (x, y) => Math.hypot(x - P.radioBtn[0], y - P.radioBtn[1]) < 16;
+window.addEventListener('pointermove', (ev) => { // на window — после обработчика поленьев, чтобы курсор не сбрасывался
+  if (ev.target !== canvas) { radioHover = 0; return; }
+  if (woodView.drag) { radioHover = 0; return; }
+  const [x, y] = woodView.toWorld(ev.clientX, ev.clientY); radioHover = hitRadio(x, y) ? 1 : 0;
+  if (radioHover) canvas.style.cursor = 'pointer';
+});
+canvas.addEventListener('pointerleave', () => { radioHover = 0; });
+canvas.addEventListener('pointerdown', (ev) => { const [x, y] = woodView.toWorld(ev.clientX, ev.clientY); if (hitRadio(x, y)) switchRadio(); });
 const volPanel = document.getElementById('volumes'), volBtn = document.getElementById('volbtn');
 for (const { id, name } of SOUND_LAYERS) {
   const row = document.createElement('label'); row.className = 'vol';
@@ -669,7 +695,10 @@ function frame(now) {
 
   coal.material.uniforms.uI.value = Math.min(1.3, ember * 0.9 + I * 0.5) * (0.85 + 0.15 * Math.sin(timeSec * 1.7));
   fireGlow.material.uniforms.uI.value = I * (0.1 + 0.06 * Math.max(0, I - 1)) * flick;
-  radioLed.material.uniforms.uI.value = 0.35 + 0.25 * Math.sin(timeSec * 1.2);
+  radioHoverT += ((radioHover ? 1 : 0) - radioHoverT) * (1 - Math.exp(-dt * 10));
+  radioHalo.material.uniforms.uI.value = 0.95 * radioHoverT;
+  if (settings.radio) { radioLed.material.uniforms.uColor.value.setRGB(0.25, 1.0, 0.3); radioLed.material.uniforms.uI.value = 0.9 + 0.05 * Math.sin(timeSec * 2.3); }
+  else { radioLed.material.uniforms.uColor.value.setRGB(1.0, 0.12, 0.08); radioLed.material.uniforms.uI.value = 0.28 + 0.12 * radioHoverT; }
 
   // пламя
   const [fx, fy] = P.fire;
@@ -729,4 +758,4 @@ function frame(now) {
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);
-window.__campfire = { fire, wood, woodView, addLog, douse, audio, state: () => ({ shown, ember, fuel: fire.fuel, doused, audio: audio.ctx?.state ?? 'none', rain: settings.rain, rainLevel: settings.rainLevel, rainShown: rainLevelShown, speed, outAt, fadeDur }), setSpeed: (v) => { speed = v; } };
+window.__campfire = { fire, wood, woodView, addLog, douse, audio, state: () => ({ shown, ember, fuel: fire.fuel, doused, audio: audio.ctx?.state ?? 'none', radio: settings.radio, radioVol: settings.radioVol, rain: settings.rain, rainLevel: settings.rainLevel, rainShown: rainLevelShown, speed, outAt, fadeDur }), setSpeed: (v) => { speed = v; } };

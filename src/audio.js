@@ -32,6 +32,17 @@ export class Ambience {
     this.rainGain = ctx.createGain(); this.rainGain.gain.value = 0;
     rain.connect(rhp).connect(rlp).connect(this.rainGain).connect(this.bus.rain); rain.start();
     this.nextDrip = ctx.currentTime;
+    // радио: эфирные помехи — полосовой шум с медленным «плаванием», треском и свистом гетеродина
+    this.radioOut = ctx.createGain(); this.radioOut.gain.value = 0; this.radioOut.connect(this.master);
+    const st = ctx.createBufferSource(); st.buffer = this.noise; st.loop = true;
+    const shp = ctx.createBiquadFilter(); shp.type = 'highpass'; shp.frequency.value = 300;
+    this.radioBp = ctx.createBiquadFilter(); this.radioBp.type = 'bandpass'; this.radioBp.frequency.value = 1800; this.radioBp.Q.value = 0.5;
+    this.radioHiss = ctx.createGain(); this.radioHiss.gain.value = 0.05;
+    st.connect(shp).connect(this.radioBp).connect(this.radioHiss).connect(this.radioOut); st.start();
+    const wh = ctx.createOscillator(); wh.type = 'sine'; wh.frequency.value = 2400;
+    this.radioWhistle = ctx.createGain(); this.radioWhistle.gain.value = 0;
+    wh.connect(this.radioWhistle).connect(this.radioOut); wh.start(); this.radioWhOsc = wh;
+    this.nextRadioPop = ctx.currentTime;
     this.applyVolumes();
     // плеск воды: розовый шум через полосовой фильтр с медленной модуляцией
     const water = ctx.createBufferSource(); water.buffer = this.brown; water.loop = true; water.playbackRate.value = 0.7;
@@ -60,12 +71,36 @@ export class Ambience {
   /** Громкости слоёв 0..1: { fire, crickets, water, wind, owl, rain }. */
   setVolumes(v) { this.volumes = { ...this.volumes, ...v }; this.applyVolumes(); }
   setRain(on, level = this.rainLevel ?? 0.35) { this.rain = !!on; this.rainLevel = level; this.applyVolumes(); }
+  /** Радио вкл/выкл и громкость 0..1. Пока станций нет — только помехи. */
+  setRadio(on, vol = this.radioVol ?? 0.6) { this.radioOn = !!on; this.radioVol = vol; this.applyVolumes(); }
+  radioClick() { // щелчок переключателя
+    if (!this.ctx) return; const ctx = this.ctx, t = ctx.currentTime;
+    const src = ctx.createBufferSource(); src.buffer = this.noise; const g = ctx.createGain(); const f = ctx.createBiquadFilter(); f.type = 'highpass'; f.frequency.value = 2500;
+    g.gain.setValueAtTime(0.25, t); g.gain.exponentialRampToValueAtTime(0.001, t + 0.025);
+    src.connect(f).connect(g).connect(this.bus.fx); src.start(t, Math.random() * 3, 0.03);
+  }
+  tickRadio(t) {
+    if (!this.radioOut || !this.radioOn) return; const ctx = this.ctx;
+    // плавание тембра и уровня помех
+    this.radioBp.frequency.setTargetAtTime(1300 + 1100 * Math.sin(t * 0.21) * Math.sin(t * 0.07 + 1), t, 0.6);
+    this.radioHiss.gain.setTargetAtTime(0.04 + 0.025 * (0.5 + 0.5 * Math.sin(t * 0.33 + Math.sin(t * 0.9))), t, 0.4);
+    // изредка тонкий свист, плывущий по частоте
+    const w = Math.max(0, Math.sin(t * 0.05 + 2) - 0.75) * 0.02;
+    this.radioWhistle.gain.setTargetAtTime(w, t, 0.8); this.radioWhOsc.frequency.setTargetAtTime(1800 + 900 * Math.sin(t * 0.13), t, 1);
+    if (t >= this.nextRadioPop) { // треск
+      this.nextRadioPop = t + 0.05 + Math.random() * Math.random() * 1.2;
+      const src = ctx.createBufferSource(); src.buffer = this.noise; const g = ctx.createGain(); const d = 0.004 + Math.random() * 0.02;
+      g.gain.setValueAtTime(0.03 + Math.random() * 0.08, t); g.gain.exponentialRampToValueAtTime(0.001, t + d);
+      src.connect(g).connect(this.radioOut); src.start(t, Math.random() * 3, d + 0.01);
+    }
+  }
   applyVolumes() {
     if (!this.bus) return; const t = this.ctx.currentTime;
     for (const [k, g] of Object.entries(this.bus)) g.gain.setTargetAtTime(this.volumes[k] ?? 1, t, 0.15);
     const R = rainParams(this.rainLevel ?? 0.35); this.R = R;
     this.rainGain.gain.setTargetAtTime(this.rain ? R.soundGain : 0, t, 1.5);
     this.rainLp.frequency.setTargetAtTime(R.soundCutoff, t, 1.5);
+    if (this.radioOut) this.radioOut.gain.setTargetAtTime(this.radioOn ? 0.9 * (this.radioVol ?? 0.6) : 0, t, this.radioOn ? 0.25 : 0.08);
   }
   /** Шипение при тушении: высокочастотный шум с затуханием + низкий «пых». */
   hiss() {
@@ -111,6 +146,7 @@ export class Ambience {
 
   schedule() {
     const ctx = this.ctx, now = ctx.currentTime, ahead = now + 0.3, I = this.intensity;
+    this.tickRadio(now);
     // гул: случайные медленные «вдохи»
     this.roarGain.gain.setTargetAtTime(I * I * (0.25 + Math.random() * 0.2), now, 0.8);
     while (this.nextCrackle < ahead) {

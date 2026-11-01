@@ -1,0 +1,17 @@
+import { chromium } from 'playwright-core';
+const b = await chromium.launch({ executablePath: '/usr/bin/google-chrome', args: ['--use-gl=angle','--use-angle=swiftshader','--enable-unsafe-swiftshader','--autoplay-policy=no-user-gesture-required'] });
+const p = await b.newPage({ viewport: { width: 1920, height: 1080 } }); const errs=[]; p.on('pageerror', e => errs.push(String(e))); p.on('console', m => m.type()==='error' && errs.push(m.text()));
+const o='/workspace/campfire_layers';
+await p.goto('http://localhost:4173/?fresh=1'); await p.waitForTimeout(3000);
+const pt = await p.evaluate(() => { const v = window.__campfire.woodView, r = v.canvas.getBoundingClientRect();
+  const sx = (x) => r.left + (x - v.crop.x) / (v.W - 2 * v.crop.x) * r.width, sy = (y) => r.top + (y - v.crop.y) / (v.H - 2 * v.crop.y) * r.height; return [sx(218), sy(810)]; });
+const clip = { x: pt[0] - 160, y: pt[1] - 110, width: 320, height: 200 };
+await p.mouse.move(900, 200); await p.waitForTimeout(1500); await p.screenshot({ path: o + '/r_off.png', clip });
+await p.mouse.move(pt[0], pt[1]); await p.waitForTimeout(1500); await p.screenshot({ path: o + '/r_hover.png', clip });
+console.log('cursor', await p.evaluate(() => document.getElementById('c').style.cursor));
+await p.mouse.click(pt[0], pt[1]); await p.waitForTimeout(1500); await p.mouse.move(900, 200); await p.waitForTimeout(1500);
+await p.screenshot({ path: o + '/r_on.png', clip });
+console.log(JSON.stringify(await p.evaluate(() => { const a = window.__campfire.audio; return { st: window.__campfire.state().radio, ctx: a.ctx?.state, g: a.radioOut?.gain.value.toFixed(3) }; })));
+await p.mouse.move(1700, 1000); await p.mouse.move(1710, 1005); await p.waitForTimeout(600);
+await p.screenshot({ path: o + '/r_menu.png', clip: { x: 1300, y: 700, width: 620, height: 380 } });
+console.log(errs); await b.close();

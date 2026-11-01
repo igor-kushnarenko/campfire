@@ -4,15 +4,17 @@ export const SOUND_LAYERS = [
   { id: 'fire', name: 'огонь' }, { id: 'crickets', name: 'сверчки' }, { id: 'water', name: 'вода' },
   { id: 'wind', name: 'ветер' }, { id: 'owl', name: 'сова/птицы' }, { id: 'rain', name: 'дождь' }, { id: 'fx', name: 'эффекты' },
 ];
-export const DEFAULT_SETTINGS = { rain: false, rainLevel: 0.35, volumes: { fire: 1, crickets: 1, water: 1, wind: 0.8, owl: 1, rain: 1, fx: 1 } };
+export const DEFAULT_SETTINGS = { rain: false, rainLevel: 0.35, radio: false, radioVol: 0.6, volumes: { fire: 1, crickets: 1, water: 1, wind: 0.8, owl: 1, rain: 1, fx: 1 } };
 const clamp01 = (x, d) => (Number.isFinite(+x) ? Math.min(1, Math.max(0, +x)) : d);
 export function loadSettings(storage = globalThis.localStorage) {
   let raw = null; try { raw = JSON.parse(storage?.getItem(SETTINGS_KEY) || 'null'); } catch {}
   const v = {}; for (const { id } of SOUND_LAYERS) v[id] = clamp01(raw?.volumes?.[id], DEFAULT_SETTINGS.volumes[id]);
-  return { rain: !!raw?.rain, rainLevel: clamp01(raw?.rainLevel, 0.35), volumes: v };
+  return { rain: !!raw?.rain, rainLevel: clamp01(raw?.rainLevel, 0.35), radio: !!raw?.radio, radioVol: clamp01(raw?.radioVol, 0.6), volumes: v };
 }
 export function saveSettings(s, storage = globalThis.localStorage) { try { storage?.setItem(SETTINGS_KEY, JSON.stringify(s)); } catch {} }
 export function toggleRain(s) { return { ...s, rain: !s.rain }; }
+export function toggleRadio(s) { return { ...s, radio: !s.radio }; }
+export function setRadioVol(s, v) { return { ...s, radioVol: clamp01(v, 0.6) }; }
 
 export const DEFAULT_RAIN_LEVEL = 0.35;
 export function setRainLevel(s, level) { return { ...s, rainLevel: clamp01(level, DEFAULT_RAIN_LEVEL) }; }

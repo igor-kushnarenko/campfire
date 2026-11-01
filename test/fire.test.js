@@ -70,7 +70,7 @@ test('add log gives a flare and different types burn differently', () => {
   assert.ok(a.tick(301_000).isOut); assert.ok(!b.tick(301_000).isOut);
 });
 import { pickEmberFade, emberLevel, EMBER_FADE_MIN, EMBER_FADE_MAX } from '../src/fire.js';
-import { loadSettings, saveSettings, toggleRain, SETTINGS_KEY } from '../src/settings.js';
+import { loadSettings, saveSettings, toggleRain, toggleRadio, setRadioVol, SETTINGS_KEY } from '../src/settings.js';
 test('ember fade duration is 5..10 minutes', () => {
   assert.equal(pickEmberFade(() => 0), 300); assert.equal(pickEmberFade(() => 1), 600);
   for (let i = 0; i < 50; i++) { const d = pickEmberFade(); assert.ok(d >= EMBER_FADE_MIN && d <= EMBER_FADE_MAX); }
@@ -107,4 +107,11 @@ test('rain level persists and is clamped', () => {
   const s = mem();
   saveSettings(setRainLevel(loadSettings(s), 0.9), s); assert.equal(loadSettings(s).rainLevel, 0.9);
   saveSettings(setRainLevel(loadSettings(s), 4), s); assert.equal(loadSettings(s).rainLevel, 1);
+});
+
+test('радио: вкл/выкл и громкость сохраняются', () => {
+  const m = new Map(); const s = { getItem: (k) => m.get(k) ?? null, setItem: (k, v) => m.set(k, v) };
+  let st = loadSettings(s); assert.equal(st.radio, false); assert.equal(st.radioVol, 0.6);
+  st = setRadioVol(toggleRadio(st), 1.7); saveSettings(st, s);
+  const r = loadSettings(s); assert.equal(r.radio, true); assert.equal(r.radioVol, 1);
 });
