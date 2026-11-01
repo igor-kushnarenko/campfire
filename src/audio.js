@@ -110,7 +110,7 @@ export class Ambience {
     const R = rainParams(this.rainLevel ?? 0.35); this.R = R;
     this.rainGain.gain.setTargetAtTime(this.rain ? R.soundGain : 0, t, 1.5);
     this.rainLp.frequency.setTargetAtTime(R.soundCutoff, t, 1.5);
-    if (this.radioOut) this.radioOut.gain.setTargetAtTime(this.radioOn ? 0.9 * (this.radioVol ?? 0.6) * (this.radioNoise ?? 1) : 0, t, this.radioOn ? 0.25 : 0.08);
+    if (this.radioOut) this.radioOut.gain.setTargetAtTime(this.radioOn ? 2.0 * (this.radioVol ?? 0.6) * (this.radioNoise ?? 1) : 0, t, this.radioOn ? 0.25 : 0.08);
   }
   /** Шипение при тушении: высокочастотный шум с затуханием + низкий «пых». */
   hiss() {

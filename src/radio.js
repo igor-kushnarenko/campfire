@@ -1,6 +1,6 @@
 // Тюнер: интернет-станции через <audio>, переходы через эфирные помехи.
 // Станция «выплывает» из шума и «тонет» в нём; нерабочие пропускаются; без сети — только шум.
-export const TUNE = { fadeOut: 0.7, fadeIn: 2.2, timeout: 9, boost: 2.6, idleNoise: 1, stationNoise: 0.12 };
+export const TUNE = { fadeOut: 0.7, fadeIn: 2.2, timeout: 9, boost: 1.7, gap: 1.4, idleNoise: 1, stationNoise: 0.12 };
 
 /** Чистая логика выбора следующей станции с пропуском нерабочих. */
 export function nextIndex(n, from, dir, bad) {
@@ -22,7 +22,7 @@ export class Tuner {
     this.target = 0; this.state = 'off'; // off | out | loading | in | on | dead
     this.t = 0; this.pending = 0; this.pendT = 0; this.vol = 0.6; this.on = false;
     for (const e of [this.cors, this.plain]) {
-      e.addEventListener('playing', () => { if (e === this.el && this.state === 'loading') { this.state = 'in'; this.onName(this.cur()?.name); } });
+      e.addEventListener('playing', () => { if (e === this.el && this.state === 'loading') this.ready = true; });
       const fail = () => {
         if (e !== this.el || !['loading', 'in', 'on'].includes(this.state)) return;
         if (e === this.cors && this.state === 'loading') { this.stop(); this.el = this.plain; this.play(); return; } // нет CORS — пробуем напрямую
@@ -52,7 +52,7 @@ export class Tuner {
   go(i) {
     if (!navigator.onLine || i < 0) { this.state = 'dead'; this.stop(); this.onName(null); return; }
     this.idx = i; const s = this.cur();
-    this.state = 'loading'; this.t = 0; this.el = this.cors; this.play();
+    this.state = 'loading'; this.t = 0; this.el = this.cors; this.play(); this.hold = TUNE.gap; // минимум шума между станциями
   }
   play() {
     if (this.el === this.cors && !this.boost && this.audio.ctx) { // подключаем к WebAudio один раз
@@ -60,7 +60,7 @@ export class Tuner {
         const comp = c.createDynamicsCompressor(); comp.threshold.value = -18; comp.ratio.value = 3; comp.attack.value = 0.01; comp.release.value = 0.3;
         src.connect(g).connect(comp).connect(this.audio.master); this.boost = g; } catch { this.el = this.plain; }
     }
-    this.el.src = this.cur().url; this.el.play().catch(() => {}); // ошибки ловит 'error' или таймаут
+    this.ready = false; this.el.src = this.cur().url; this.el.play().catch(() => {}); // ошибки ловит 'error' или таймаут
   }
   skip() {
     this.bad.add(this.idx); this.stop();
@@ -81,7 +81,8 @@ export class Tuner {
         this.go(i);
       }
     } else if (s === 'loading') {
-      this.t += dt; this.mix = 0;
+      this.t += dt; this.mix = 0; this.hold -= dt;
+      if (this.ready && this.hold <= 0) { this.ready = false; this.state = 'in'; this.onName(this.cur()?.name); }
       if (this.t > TUNE.timeout) this.skip();
     } else if (s === 'in') {
       this.mix = Math.min(1, this.mix + dt / TUNE.fadeIn); if (this.mix >= 1) this.state = 'on';
