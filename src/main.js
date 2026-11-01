@@ -1,6 +1,8 @@
 // Медитативный пиксельный костёр у озера. Слои — PNG пользователя, вся анимация и свет — в коде.
 import * as THREE from 'three';
-import { Fire, DEFAULT_LOGS, describeLog, pickEmberFade, emberLevel } from './fire.js';
+import { pickEmberFade, emberLevel } from './fire.js';
+import { Woodpile, loadWood, saveWood, makeLog, SPECIES, heatCurve, PILE_MAX } from './wood.js';
+import { WoodView } from './woodview.js';
 import { SOUND_LAYERS, loadSettings, saveSettings, toggleRain, setRainLevel, rainParams } from './settings.js';
 // Временные тестовые кнопки скорости времени. Чтобы убрать — поставить false.
 const TEST_CONTROLS = true;
@@ -312,6 +314,7 @@ const lanternGlow = glow(170, 170, [0.9, 0.5, 0.18]);
 for (const g of [lanternFlame, lanternGlow]) { g.position.set(P.lanternFlame[0] - P.lanternPivot[0], -(P.lanternFlame[1] - P.lanternPivot[1]), 0); lanternPivot.add(g); }
 layer('11_firering', { lit: 1.0 });
 layer('12_fire_logs', { lit: 1.0 });
+const ORD_FIRE = order++; // поленья в костре
 const coal = glow(300, 90, [1.0, 0.28, 0.05], { noise: 1 }); coal.position.set(P.fire[0], wy(P.fire[1] + 5), 0); scene.add(coal);
 // Пламя в три слоя: задний широкий тусклый, средний оранжевый, переднее бело-жёлтое ядро.
 // У каждого слоя свои языки (позиция, высота, ширина, фаза), скорость и зерно шума.
@@ -374,9 +377,13 @@ const flames = FLAME_LAYERS.map((L) => {
 });
 // передние камни кольца рисуем повторно поверх пламени
 const ringFront = layer('11_firering', { lit: 1.0, extra: { uClipY: { value: CLIP_Y } } });
+const ORD_ZONE = order++;
 const sparks = new Particles(150, THREE.AdditiveBlending); scene.add(sparks.points);
-layer('13_woodpile', { lit: 1.3 });
-layer('14_stump_axe', { lit: 1.2 });
+// статичная поленница заменена отдельными поленьями (см. woodview.js)
+const ORD_PILE = order++;
+layer('14_stump', { lit: 1.2 });
+const ORD_AXE = order++;
+const chips = new Particles(90, THREE.NormalBlending); scene.add(chips.points); chips.points.material.uniforms.uCells.value = 2;
 layer('15_camp_left', { lit: 1.2 });
 const steam = new Particles(80, THREE.NormalBlending); scene.add(steam.points);
 const radioLed = glow(16, 10, [0.5, 1.0, 0.4]); radioLed.position.set(P.radio[0], wy(P.radio[1]), 0); scene.add(radioLed);
@@ -384,6 +391,7 @@ const smoke = new Particles(160, THREE.NormalBlending); scene.add(smoke.points);
 smoke.points.material.uniforms.uCells.value = 14; steam.points.material.uniforms.uCells.value = 8; // дым мягче искр
 const fireGlow = glow(700, 420, [1.0, 0.42, 0.12]); fireGlow.position.set(P.fire[0], wy(P.fire[1] - 60), 0); scene.add(fireGlow);
 layer('16_foreground', { lit: 0.9 });
+const ORD_DRAG = order++; // перетаскиваемое полено — поверх всего
 const rainNear = rainLayer(true);
 
 // апскейл ближайшим соседом + лёгкая виньетка
@@ -395,15 +403,26 @@ const post = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), new THREE.ShaderMater
     vec2 q=vUv-.5; c*=1.-dot(q,q)*0.55; gl_FragColor=vec4(c,1.); }` }));
 const postScene = new THREE.Scene(); postScene.add(post); const postCam = new THREE.Camera();
 
+const rand = (a, b) => a + Math.random() * (b - a);
 // ---------- состояние и логика костра ----------
 let vclock = Date.now(), speed = SPEED; // виртуальные часы костра (тестовые кнопки меняют speed)
 const vnow = () => vclock;
-const fuelParam = params.get('fuel'); // ?fuel=60: стартовый запас в секундах (отладка)
-const fire = fuelParam !== null ? new Fire({ fuel: Number(fuelParam), now: vnow() })
-  : SPEED === 1 ? Fire.load(localStorage, vnow()) : new Fire({ now: vnow() });
+// ?fresh=1 — начать с чистого состояния; ?prog=0.5 — прогресс горения поленьев в костре (отладка)
+const fresh = params.has('fresh');
+function startWood() {
+  const w = new Woodpile();
+  const k = makeLog('kindling'); k.p = 0.12; const b = makeLog('birch_medium'); b.p = 0.04;
+  w.fire.push(k, b); return w;
+}
+const wood = (!fresh && loadWood(localStorage, Date.now())) || startWood();
+if (params.has('prog')) for (const l of wood.fire) l.p = Math.min(0.99, Number(params.get('prog')));
+// совместимость со старым кодом сцены
+const fire = { get fuel() { return wood.burning ? 1 : 0; }, get isOut() { return !wood.burning; }, get intensity() { return wood.intensity(); },
+  tick() {}, extinguish() { wood.douse(); }, save() { saveWood(wood, Date.now()); } };
+const fuelParam = null;
 let shown = 0, ember = 0, doused = 0, outAt = null, fadeDur = 420, emberStart = 0; // doused: секунд с момента тушения (0 — не тушили)
 const audio = new Ambience();
-let sel = 1, burst = 0;
+let sel = 0, burst = 0;
 let settings = loadSettings();
 audio.setVolumes(settings.volumes); audio.setRain(settings.rain, settings.rainLevel);
 let rainLevelShown = settings.rainLevel;
@@ -436,18 +455,25 @@ if (TEST_CONTROLS) {
 } else testRow.remove();
 
 const seg = document.getElementById('logtype'), info = document.getElementById('info');
-DEFAULT_LOGS.forEach((l, i) => {
-  const b = document.createElement('button'); b.type = 'button'; b.className = 'seg'; b.textContent = l.name; b.title = describeLog(l);
+// выбор породы для кнопки «Подбросить дрова» (если такой нет в поленнице — берётся любая)
+const KINDS = [{ id: null, name: 'любые' }, { id: 'birch', name: 'берёза' }, { id: 'oak', name: 'дуб' }, { id: 'pine', name: 'сосна' }, { id: 'kindling', name: 'растопка' }];
+KINDS.forEach((k, i) => {
+  const b = document.createElement('button'); b.type = 'button'; b.className = 'seg'; b.textContent = k.name;
   b.setAttribute('role', 'radio');
   b.addEventListener('click', () => { sel = i; renderUI(); }); seg.appendChild(b);
 });
-const persist = () => { if (speed === 1 && fuelParam === null) fire.save(); };
+const persist = () => { if (speed === 1) fire.save(); };
+const toast = document.getElementById('toast'); let toastT;
+function hint(text) { toast.textContent = text; toast.classList.add('show'); clearTimeout(toastT); toastT = setTimeout(() => toast.classList.remove('show'), 2600); }
 function renderUI() {
   [...seg.children].forEach((c, i) => { c.classList.toggle('sel', i === sel); c.setAttribute('aria-checked', i === sel); });
-  const mins = Math.ceil(fire.fuel / 60);
-  info.textContent = fire.isOut ? (ember > 0.02 ? 'тлеют угли' : 'костёр погас') : `огня хватит на ~${mins} мин · ${describeLog(DEFAULT_LOGS[sel])}`;
+  const inFire = wood.fire.filter((l) => !l.wet).length;
+  info.textContent = `${fire.isOut ? (ember > 0.02 ? 'тлеют угли' : 'костёр погас') : `в костре: ${inFire}`} · в поленнице: ${wood.pile.length}/${PILE_MAX}`;
 }
-function addLog() { fire.addLog(DEFAULT_LOGS[sel].id, vnow()); doused = 0; persist(); renderUI(); burst = 1; audio.thud?.(); }
+function addLog() {
+  if (!woodView.throwOne(KINDS[sel].id)) hint('Поленница пуста — наколите дров топором у пня');
+  renderUI();
+}
 function douse() {
   if (fire.isOut && ember < 0.05) return;
   fire.extinguish(vnow()); persist();
@@ -513,8 +539,23 @@ function resize() {
 }
 addEventListener('resize', resize); resize();
 
+// ---------- дрова: поленница, перетаскивание, топор ----------
+function sparkBurst(x, y, n) {
+  for (let k = 0; k < n; k++) sparks.spawn({ x: x + rand(-30, 30), y: y - rand(0, 20), vx: rand(-120, 120), vy: -rand(120, 320), life: rand(0.6, 1.6), ph: rand(0, 6), drift: rand(20, 60) });
+}
+function chipBurst(x, y) {
+  for (let k = 0; k < 14; k++) chips.spawn({ x: x + rand(-10, 10), y, vx: rand(-160, 160), vy: -rand(80, 260), life: rand(0.5, 0.9), c: Math.random() });
+}
+const woodView = new WoodView({ scene, shared, PIX, W, H, wy, crop: { x: CROP_X, y: CROP_Y }, canvas, audio, wood, hint, sparkBurst, chipBurst,
+  orders: { pile: ORD_PILE, fire: ORD_FIRE, drag: ORD_DRAG, axe: ORD_AXE, zone: ORD_ZONE },
+  isRaining: () => settings.rain,
+  changed: () => { persist(); renderUI(); },
+  onLand: (log, x, y) => {
+    doused = 0; burst = 1; audio.thud?.(); sparkBurst(x, y - 10, 22);
+    if (settings.rain && log.moisture > 0.25) audio.wetHiss?.();
+  } });
 // ---------- кадр ----------
-const rand = (a, b) => a + Math.random() * (b - a);
+
 let last = performance.now(), nextBats = 60 + Math.random() * 120, saveAt = 0, timeSec = 0;
 function frame(now) {
   const realDt = Math.max(0, (now - last) / 1000), dt = Math.min(0.1, realDt); last = now; timeSec += dt;
@@ -526,14 +567,20 @@ function frame(now) {
   shared.uRainA.value = RP.alpha; shared.uRainRing.value = RP.rings; shared.uRainDesat.value = RP.desat; shared.uRainDark.value = RP.darken;
   shared.uRainT.value += dt * RP.speed;
   shared.uFogBoost.value = 1 + shared.uRain.value * (RP.fog - 1);
-  fire.tick(vnow());
+  const raining = settings.rain && shared.uRain.value > 0.5;
+  wood.tick(realDt * speed, raining);
+  const [shx, shy] = woodView.update(dt); cam.position.set(shx, shy, 0);
+  // сосна «стреляет» искрами
+  for (const l of wood.fire) if (!l.wet && l.species === 'pine' && Math.random() < dt * 0.5 * heatCurve('pine', l.thick, l.p)) {
+    audio.pop?.(); const [px, py] = P.fire; sparkBurst(px + rand(-50, 50), py - 10, 8);
+  }
   const target = fire.intensity * (1 - shared.uRain.value * RP.fireDamp); // под дождём приглушён (сильнее при ливне), но не гаснет
   // огонь разгорается за несколько секунд и угасает медленно
   if (doused > 0) doused += dt;
   const downRate = doused > 0 ? 2.5 : 0.08; // после тушения пламя гаснет за ~1–2 с
   shown += (target - shown) * (target > shown ? 1 - Math.exp(-dt * 0.6) : 1 - Math.exp(-dt * downRate));
-  if (fire.fuel > 0) { ember = Math.max(ember, 0.25 + 0.5 * shown); outAt = null; }
-  else { // угли полностью гаснут за 5–10 минут (и после тушения, и когда прогорело само)
+  if (fire.fuel > 0) { ember = Math.max(ember, 0.25 + 0.5 * shown, Math.min(1, wood.coal * 0.6)); outAt = null; }
+  else { wood.coal = ember / 0.6; // угли полностью гаснут за 5–10 минут (и после тушения, и когда прогорело само)
     if (outAt === null) { outAt = vclock; fadeDur = pickEmberFade(); emberStart = ember; }
     ember = emberLevel((vclock - outAt) / 1000, fadeDur, emberStart);
   }
@@ -592,6 +639,11 @@ function frame(now) {
     nextBats = rand(120, 300); // редко: раз в 2–5 минут const dir = Math.random() < 0.5 ? 1 : -1, y = rand(140, 330), n = 1 + (Math.random() * 3 | 0);
     for (let i = 0; i < n; i++) bats.spawn({ x: dir > 0 ? -40 - i * 60 : W + 40 + i * 60, y: y + rand(-30, 30), vx: dir * rand(110, 160), life: 22, ph: rand(0, 6) });
   }
+  chips.update(dt, (p, dt, k) => {
+    p.vy += 900 * dt; p.x += p.vx * dt; p.y += p.vy * dt;
+    const c = p.c > 0.5 ? [0.85, 0.7, 0.48] : [0.55, 0.38, 0.24];
+    return { r: c[0], g: c[1], b: c[2], size: 5, a: 1 - k * k };
+  });
   bats.update(dt, (p, dt) => {
     p.x += p.vx * dt; p.y += Math.sin(timeSec * 2 + p.ph) * 18 * dt;
     if (p.x < -200 || p.x > W + 200) p.age = p.life;
@@ -606,4 +658,4 @@ function frame(now) {
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);
-window.__campfire = { fire, addLog, douse, audio, state: () => ({ shown, ember, fuel: fire.fuel, doused, audio: audio.ctx?.state ?? 'none', rain: settings.rain, rainLevel: settings.rainLevel, rainShown: rainLevelShown, speed, outAt, fadeDur }), setSpeed: (v) => { speed = v; } };
+window.__campfire = { fire, wood, woodView, addLog, douse, audio, state: () => ({ shown, ember, fuel: fire.fuel, doused, audio: audio.ctx?.state ?? 'none', rain: settings.rain, rainLevel: settings.rainLevel, rainShown: rainLevelShown, speed, outAt, fadeDur }), setSpeed: (v) => { speed = v; } };
