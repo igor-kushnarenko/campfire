@@ -261,8 +261,7 @@ export class WoodView {
         if (a.t > T3) this.axeAnim = null;
       }
     }
-    // поворот по часовой при y вниз = отрицательный угол в three → лезвие вверх
-    this.axe.rotation.z = -ang; this.axe.position.y = this.wy(this.axePivot[1] + dy);
+        this.axe.rotation.z = ang; // отрицательный ang поднимает лезвие (оно слева от точки хвата) this.axe.position.y = this.wy(this.axePivot[1] + dy);
     this.axeMat.uniforms.uHi.value += ((this.hoverAxe ? 1 : 0) - this.axeMat.uniforms.uHi.value) * Math.min(1, dt * 10);
   }
   onChop() {

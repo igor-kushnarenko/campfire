@@ -499,6 +499,7 @@ function toggleFs() {
 }
 document.getElementById('add').addEventListener('click', addLog);
 document.getElementById('douse').addEventListener('click', douse);
+document.getElementById('chopbtn').addEventListener('click', () => woodView.chop());
 muteBtn.addEventListener('click', toggleMute);
 fsBtn.addEventListener('click', toggleFs);
 // любой жест (клик, тап, клавиша пульта) включает звук; дрова по клику на сцену НЕ добавляются
