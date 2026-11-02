@@ -295,6 +295,8 @@ const cloudMat = new THREE.ShaderMaterial({ vertexShader: layerVert, transparent
   }` });
 const clouds = new THREE.Mesh(plane, cloudMat); clouds.position.set(W / 2, H / 2, 0); clouds.renderOrder = order++; scene.add(clouds);
 const mountains = layer('04_mountains', { lit: 0 });
+// горы шире и ниже, чтобы закрыть просвет неба над дальним берегом (верх ~280, низ ~448)
+{ const SX = 1.2, SY = 1.4; mountains.scale.set(SX, SY, 1); mountains.position.set(863 - (863 - W / 2) * SX, wy(280 - (286 - H / 2) * SY), 0); }
 // лёгкий туман в низинах: мягкая полоса fbm, медленно плывёт
 const fogFrag = `uniform float uTime,uY0,uY1,uA,uFogBoost; varying vec2 vUv;
   float hash(vec2 p){ return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453); }
